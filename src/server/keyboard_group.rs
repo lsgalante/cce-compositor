@@ -25,11 +25,9 @@ pub struct Press {
 
 pub struct KeyboardGroup {
     pub ref_count: u32,
-    /// The owning seat, for the teardown in `unref` (which `Seat::destroy`
-    /// runs after taking the seat out of its store). The event handlers
-    /// find the seat by `sid` instead.
-    pub seat: *mut Seat,
-    /// The owning seat's id; `None` without one.
+    /// The owning seat's id; `None` without one. The group keeps no
+    /// pointer to its seat: the event handlers look it up by this id, and
+    /// `unref`'s teardown is handed the seat by its caller.
     pub sid: Option<crate::seat::SeatId>,
     pub link: ffi::wl_list, // Seat.keyboard_groups
     pub virtual_device: bool,
@@ -50,7 +48,6 @@ impl KeyboardGroup {
     ) -> Result<*mut Self, &'static str> {
         let mut group = Box::new(Self {
             ref_count: 1,
-            seat,
             sid: if seat.is_null() { None } else { Some((*seat).id) },
             link: std::mem::zeroed(),
             virtual_device,
@@ -103,7 +100,11 @@ impl KeyboardGroup {
         self
     }
 
-    pub unsafe fn unref(&mut self, to_release: &[u32]) {
+    /// Drop a reference; the last one tears the group down. `seat` is the
+    /// group's seat, from the caller (null when there is none to hand the
+    /// active keyboard over on: wlroots then clears it from the seat as the
+    /// keyboard finishes).
+    pub unsafe fn unref(&mut self, seat: *mut Seat, to_release: &[u32]) {
         for &keycode in to_release {
             let mut event = ffi::wlr_keyboard_key_event {
                 time_msec: crate::util::msec_timestamp(),
@@ -124,15 +125,14 @@ impl KeyboardGroup {
         self.modifiers_listener.disconnect();
 
         // If the currently active keyboard of a seat is destroyed, we need to set a new active keyboard.
-        let active_wlr_kbd = (*self.seat).wlr_seat.keyboard();
-        if active_wlr_kbd == &mut self.wlr_keyboard {
-            let seat_groups_head = &mut (*self.seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
+        if !seat.is_null() && (*seat).wlr_seat.keyboard() == &mut self.wlr_keyboard as *mut ffi::wlr_keyboard {
+            let seat_groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
             let first_node = (*seat_groups_head).next;
             if first_node != seat_groups_head {
                 let other_group = crate::container_of!(first_node, KeyboardGroup, link);
-                ffi::wlr_seat_set_keyboard((*self.seat).wlr_seat.ptr(), &mut (*other_group).wlr_keyboard);
+                ffi::wlr_seat_set_keyboard((*seat).wlr_seat.ptr(), &mut (*other_group).wlr_keyboard);
             } else {
-                ffi::wlr_seat_set_keyboard((*self.seat).wlr_seat.ptr(), std::ptr::null_mut());
+                ffi::wlr_seat_set_keyboard((*seat).wlr_seat.ptr(), std::ptr::null_mut());
             }
         }
 

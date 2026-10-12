@@ -264,7 +264,7 @@ impl Seat {
         if !(*seat).synthetic_keyboard.is_null() {
             let group = (*seat).synthetic_keyboard;
             (*seat).synthetic_keyboard = std::ptr::null_mut();
-            (*group).unref(&[]);
+            (*group).unref(seat, &[]);
         }
 
         // Verify keyboard_groups is empty
@@ -385,7 +385,8 @@ impl Seat {
                 if !(*keyboard).group.is_null() {
                     let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
                     crate::server::wl_list_remove(&mut (*keyboard).group_link as *mut ffi::wl_list as *mut crate::server::WlList);
-                    (*(*keyboard).group).unref(&keys);
+                    let seat: *mut Seat = seat_mut!(wm, sid, ());
+                    (*(*keyboard).group).unref(seat, &keys);
                     (*keyboard).group = std::ptr::null_mut();
                 }
             }

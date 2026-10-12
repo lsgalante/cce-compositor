@@ -113,9 +113,12 @@ impl Keyboard {
             (*keyboard).keymap_listener.disconnect();
         }
 
+        // Normally gone already: the device is detached (which drops the
+        // group) before its keyboard is destroyed. A group left here has no
+        // seat to hand the active keyboard over on.
         if !(*keyboard).group.is_null() {
             let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
-            (*(*keyboard).group).unref(&keys);
+            (*(*keyboard).group).unref(std::ptr::null_mut(), &keys);
             (*keyboard).group = std::ptr::null_mut();
         }
 
@@ -177,7 +180,7 @@ impl Keyboard {
         if !self.group.is_null() {
             let keys: Vec<u32> = self.pressed.iter().cloned().collect();
             crate::server::wl_list_remove(&mut self.group_link as *mut ffi::wl_list as *mut crate::server::WlList);
-            (*self.group).unref(&keys);
+            (*self.group).unref(seat, &keys);
             self.group = std::ptr::null_mut();
         }
         self.set_group(seat);
@@ -198,7 +201,7 @@ impl Keyboard {
         if !self.group.is_null() {
             let keys: Vec<u32> = self.pressed.iter().cloned().collect();
             crate::server::wl_list_remove(&mut self.group_link as *mut ffi::wl_list as *mut crate::server::WlList);
-            (*self.group).unref(&keys);
+            (*self.group).unref(seat, &keys);
             self.group = std::ptr::null_mut();
         }
         self.set_group(seat);
