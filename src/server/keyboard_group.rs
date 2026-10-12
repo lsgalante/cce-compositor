@@ -64,7 +64,7 @@ impl KeyboardGroup {
         ffi::wl_list_init(&mut group.link);
 
         // Add to seat.keyboard_groups
-        let seat_groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
+        let seat_groups_head = (*seat).keyboard_groups_head() as *mut crate::server::WlList;
         crate::server::wl_list_insert((*seat_groups_head).prev, &mut group.link as *mut ffi::wl_list as *mut crate::server::WlList);
 
         let group_ptr = Box::into_raw(group);
@@ -126,7 +126,7 @@ impl KeyboardGroup {
 
         // If the currently active keyboard of a seat is destroyed, we need to set a new active keyboard.
         if !seat.is_null() && (*seat).wlr_seat().keyboard() == &mut self.wlr_keyboard as *mut ffi::wlr_keyboard {
-            let seat_groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
+            let seat_groups_head = (*seat).keyboard_groups_head() as *mut crate::server::WlList;
             let first_node = (*seat_groups_head).next;
             if first_node != seat_groups_head {
                 let other_group = crate::container_of!(first_node, KeyboardGroup, link);

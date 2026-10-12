@@ -105,6 +105,10 @@ pub struct Seat {
     /// `Seat::focus`'s caller vouched for the surface: the status line and
     /// the chrome check read this, never the surface itself.
     focused_layer_namespace: Option<String>,
+    /// Only `Seat::create` can build a `Seat` (no struct literal elsewhere),
+    /// so the invariants it establishes — the keyboard-group list head
+    /// initialised — hold for every `&mut Seat`.
+    _built_by_create: (),
     /// Touchscreens attached to this seat. The seat offers the touch
     /// capability only while there is one: a client that sees it binds
     /// `wl_touch`, and from then on a finger on its surface reaches it as
@@ -117,11 +121,14 @@ pub struct Seat {
     pub touch_injected: bool,
     pub relay: crate::input_relay::InputRelay,
     pub layer_shell: crate::layer_shell::LayerShellSeat,
-    pub keyboard_groups: ffi::wl_list,
+    /// The keyboard groups on this seat (`KeyboardGroup::link`). Private,
+    /// and `Seat` can only be built by `create`, which initialises it, so
+    /// every `Seat` holds a valid list head (`keyboard_groups_head`).
+    keyboard_groups: ffi::wl_list,
     /// A device-less keyboard group, created on demand by
     /// [`Seat::ensure_synthetic_keyboard`] when the backend supplies no
     /// keyboard at all. Null on any seat that has a real one.
-    pub synthetic_keyboard: *mut crate::keyboard_group::KeyboardGroup,
+    synthetic_keyboard: *mut crate::keyboard_group::KeyboardGroup,
     pub modifiers_old: u32,
     pub op: Option<SeatOp>,
     /// One-shot focus-follow-pan suppression, set around refocuses caused
@@ -211,6 +218,7 @@ impl Seat {
             cursor: Cursor::default(),
             focused: Focus::None,
             focused_layer_namespace: None,
+            _built_by_create: (),
             touch_devices: 0,
             touch_injected: false,
             relay: crate::input_relay::InputRelay::new(),
@@ -763,7 +771,13 @@ impl Seat {
     ///
     /// A real keyboard always wins — this is a no-op the moment the seat has
     /// one, so a normal session never reaches the creation path.
-    pub unsafe fn ensure_synthetic_keyboard(&mut self) -> bool {
+    /// The keyboard-group list head: valid for as long as the seat lives
+    /// (initialised by `create`), for `KeyboardGroup` to link into.
+    pub fn keyboard_groups_head(&mut self) -> *mut ffi::wl_list {
+        &mut self.keyboard_groups
+    }
+
+    pub fn ensure_synthetic_keyboard(&mut self) -> bool {
         if !self.wlr_seat().keyboard().is_null() {
             return true;
         }
@@ -784,15 +798,23 @@ impl Seat {
             repeat_rate: crate::keyboard::DEFAULT_REPEAT_RATE,
             repeat_delay: crate::keyboard::DEFAULT_REPEAT_DELAY,
         };
-        match crate::keyboard_group::KeyboardGroup::create(self, config, true) {
+        // SAFETY: `self` came from `Seat::create` (the only way to build
+        // one), so its keyboard-group list is initialised, as
+        // `KeyboardGroup::create` needs; the keymap is the live default one.
+        match unsafe { crate::keyboard_group::KeyboardGroup::create(self, config, true) } {
             Ok(group) => {
                 self.synthetic_keyboard = group;
                 // set_keyboard is what pushes the keymap out to every bound
                 // client; the enter re-announces focus with it in place.
-                ffi::wlr_seat_set_keyboard(self.wlr_seat().ptr(), &mut (*group).wlr_keyboard);
-                let focused = self.wlr_seat().keyboard_focused_surface();
-                if !focused.is_null() {
-                    self.keyboard_notify_enter(focused);
+                // SAFETY: the group was just created and lives on the seat
+                // until `Seat::destroy`; the focused surface is wlroots' own
+                // keyboard focus, which it clears when the surface goes.
+                unsafe {
+                    ffi::wlr_seat_set_keyboard(self.wlr_seat().ptr(), &mut (*group).wlr_keyboard);
+                    let focused = self.wlr_seat().keyboard_focused_surface();
+                    if !focused.is_null() {
+                        self.keyboard_notify_enter(focused);
+                    }
                 }
                 log::info!("[seat] no keyboard device on this backend — created a synthetic one so injected keys reach clients");
                 true

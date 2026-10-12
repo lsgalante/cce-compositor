@@ -6,45 +6,65 @@ use super::*;
 
 pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, axis_listener)).sid;
+    let cursor = &*crate::container_of!(listener, Cursor, axis_listener);
+    let sid = cursor.sid;
+    let event = &*(data as *const ffi::wlr_pointer_axis_event);
+    let device = AxisDevice::of(event, cursor.inject_natural);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_axis(wm, sid, data, sys);
+    on_axis(wm, sid, event, device, sys);
+}
+
+/// What only the device behind an axis event knows, read once at the entry
+/// point so the rest of the axis path works on values.
+#[derive(Clone, Copy)]
+pub(crate) struct AxisDevice {
+    /// The device's `scroll_factor` (river input config); 1 for injected
+    /// events.
+    pub scroll_factor: f64,
+    /// Whether the device scrolls naturally (libinput); the injector's own
+    /// flag for injected events.
+    pub natural: bool,
+}
+
+impl AxisDevice {
+    /// The facts for `event`'s device; `inject_natural` stands in for a
+    /// device-less (injected) event.
+    ///
+    /// # Safety
+    /// `event` is the event being dispatched: its pointer device, if any,
+    /// is live.
+    unsafe fn of(event: &ffi::wlr_pointer_axis_event, inject_natural: bool) -> Self {
+        if event.pointer.is_null() {
+            return AxisDevice { scroll_factor: 1.0, natural: inject_natural };
+        }
+        let wlr_device = &mut (*event.pointer).base as *mut ffi::wlr_input_device;
+        let device_ptr = ffi::river_wlr_input_device_get_data(wlr_device) as *mut crate::input_device::InputDevice;
+        let scroll_factor = if device_ptr.is_null() { 1.0 } else { (*device_ptr).config.scroll_factor };
+        let natural = ffi::wlr_input_device_is_libinput(wlr_device) && {
+            let handle = ffi::wlr_libinput_get_device_handle(wlr_device);
+            !handle.is_null()
+                && ffi::libinput_device_config_scroll_has_natural_scroll(handle) != 0
+                && ffi::libinput_device_config_scroll_get_natural_scroll_enabled(handle) != 0
+        };
+        AxisDevice { scroll_factor, natural }
+    }
 }
 
 /// `handle_axis` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
-    let Some(sptr) = wm.seats.ptr(sid) else { return () };
-    let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
-    let _ = cptr;
-    let event = data as *mut ffi::wlr_pointer_axis_event;
+pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, event: &ffi::wlr_pointer_axis_event, device: AxisDevice, sys: &mut crate::ctx::Sys) {
     crate::seat::Seat::handle_activity(wm, sid, sys);
-    
+
     let seat = seat_mut!(wm, sid, ());
-    
-    let mut delta = (*event).delta;
-    let mut delta_discrete = (*event).delta_discrete;
 
-    if !(*event).pointer.is_null() {
-        let wlr_device = &mut (*(*event).pointer).base as *mut ffi::wlr_input_device;
-        let device_ptr = ffi::river_wlr_input_device_get_data(wlr_device) as *mut crate::input_device::InputDevice;
-        if !device_ptr.is_null() {
-            let factor = (*device_ptr).config.scroll_factor;
-            delta *= factor;
-            delta_discrete = (delta_discrete as f64 * factor) as i32;
-        }
-    }
+    let delta = event.delta * device.scroll_factor;
+    let delta_discrete = (event.delta_discrete as f64 * device.scroll_factor) as i32;
 
-    let wlr_keyboard = seat.wlr_seat().keyboard();
     // Modifiers held through `ccectl key-down` count too, so a headless
     // session can exercise the modifier branches below.
-    let modifiers = if !wlr_keyboard.is_null() {
-        ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
-    } else {
-        0
-    } | wm.injected_key_mods;
+    let modifiers = seat.wlr_seat().keyboard_modifiers() | wm.injected_key_mods;
 
     if (modifiers & 0x44) == 0x44 {
-        if (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
+        if event.orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
             if delta != 0.0 {
                 // Each notch advances the zoom TARGET (successive notches
                 // accumulate into one glide); the animation tick eases the
@@ -94,7 +114,9 @@ pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid:
                 }
                 SceneNodeDataVal::LayerSurface(layer_surface) => {
                     over_interactive = true;
-                    over_chrome = is_cloud_layer(layer_surface);
+                    // SAFETY: a layer surface the hit test just found is
+                    // live (its scene data dies with its tree).
+                    over_chrome = unsafe { is_cloud_layer(layer_surface) };
                 }
                 SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                     over_interactive = true;
@@ -108,8 +130,8 @@ pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid:
     let is_overview = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
         && !over_chrome;
 
-    let is_finger = (*event).source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER
-        || (*event).source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_CONTINUOUS;
+    let is_finger = event.source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER
+        || event.source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_CONTINUOUS;
 
     let cursor = cursor_mut!(wm, sid, ());
     let mut was_panning = cursor.panning_gesture_active;
@@ -126,10 +148,10 @@ pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid:
     if (modifiers & 0x40) != 0 || is_on_background || is_overview || was_panning {
         let step = delta / wm.desk_zoom;
         let vertical =
-            (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
+            event.orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
         if is_finger {
             let axis = if vertical { 1 } else { 0 };
-            let now_ms = (*event).time_msec;
+            let now_ms = event.time_msec;
             if delta != 0.0 {
                 // Finger/continuous scroll tracks 1:1 — the surface follows
                 // the gesture directly, no easing between the two — while a
@@ -195,7 +217,7 @@ pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid:
     // A two-finger scroll over an app in `touchpad_view_apps` becomes a
     // view drag instead of a scroll (see `ViewDrag`), and one over that
     // app's own popup becomes a wheel (see `PopupWheel`).
-    if is_finger && crate::cursor::Cursor::view_drag_axis(wm, sid, event, delta, modifiers) {
+    if is_finger && crate::cursor::Cursor::view_drag_axis(wm, sid, event, device.natural, delta, modifiers) {
         return;
     }
     if is_finger && crate::cursor::Cursor::popup_wheel_axis(wm, sid, event, delta, modifiers) {
@@ -211,7 +233,7 @@ pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid:
     }
 
     let seat = seat_mut!(wm, sid, ());
-    seat.wlr_seat().pointer_notify_axis((*event).time_msec, (*event).orientation, delta, delta_discrete, (*event).source, (*event).relative_direction);
+    seat.wlr_seat().pointer_notify_axis(event.time_msec, event.orientation, delta, delta_discrete, event.source, event.relative_direction);
 }
 
 /// An emulated view drag: trackpad input over a window turned into what
@@ -238,7 +260,7 @@ pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid:
 /// delta before the compositor sees it, which is right for a scroll (the
 /// content follows the fingers) and wrong for a drag replayed as pointer
 /// motion: the view follows the pointer, so the pointer has to go where
-/// the fingers went. `axis_event_is_natural` asks the source device, and
+/// the fingers went. `AxisDevice::natural` asks the source device, and
 /// `touchpad_view_invert` then means "backwards" on top of that either way.
 pub struct ViewDrag {
     pub button: u32,
@@ -316,25 +338,7 @@ impl Cursor {
         Some((window_id, result.surface, result.sx, result.sy, ratio))
     }
 
-    /// Whether the touchpad behind an axis event has natural scrolling on,
-    /// i.e. its deltas arrive sign-flipped. An injected event has no device
-    /// and answers with `inject_natural` (see `pointer-scroll ... natural`).
-    unsafe fn axis_event_is_natural(&self, event: *const ffi::wlr_pointer_axis_event) -> bool {
-        let pointer = (*event).pointer;
-        if pointer.is_null() {
-            return self.inject_natural;
-        }
-        let dev = &mut (*pointer).base as *mut ffi::wlr_input_device;
-        if !ffi::wlr_input_device_is_libinput(dev) {
-            return false;
-        }
-        let handle = ffi::wlr_libinput_get_device_handle(dev);
-        !handle.is_null()
-            && ffi::libinput_device_config_scroll_has_natural_scroll(handle) != 0
-            && ffi::libinput_device_config_scroll_get_natural_scroll_enabled(handle) != 0
-    }
-
-    unsafe fn begin_view_drag(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, button: u32, from_pinch: bool) -> bool {
+    fn begin_view_drag(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, button: u32, from_pinch: bool) -> bool {
         let this = cursor_mut!(wm, sid, false);
         let (x, y) = (this.x(), this.y());
         let Some((window, surface, sx, sy, ratio)) = Cursor::view_drag_target(wm, x, y) else { return false };
@@ -347,7 +351,9 @@ impl Cursor {
         let time = crate::util::msec_timestamp();
         let repeat = seat.wlr_seat().keyboard_repeat_info();
         seat.wlr_seat().set_keyboard_repeat_info(0, 0);
-        ffi::wlr_seat_pointer_notify_enter(seat.wlr_seat().ptr(), surface, sx, sy);
+        // SAFETY: the surface `view_drag_target` just hit; focusing the
+        // window and creating a keyboard dispatch no client.
+        unsafe { seat.wlr_seat().pointer_notify_enter(surface, sx, sy) };
         seat.wlr_seat().keyboard_notify_key(time, KEY_SPACE, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
         seat.wlr_seat().pointer_notify_frame();
         log::info!("[ViewDrag] begin button={:#x} from_pinch={} at surface ({:.0}, {:.0}) ratio={}", button, from_pinch, sx, sy, ratio);
@@ -404,7 +410,7 @@ impl Cursor {
 
     /// A finger-source axis event over a `touchpad_view_apps` window.
     /// Returns true when it was consumed by the emulation.
-    pub unsafe fn view_drag_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, event: *const ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
+    pub fn view_drag_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, event: &ffi::wlr_pointer_axis_event, natural: bool, delta: f64, modifiers: u32) -> bool {
         let this = cursor_mut!(wm, sid, false);
         const SHIFT: u32 = 0x1;
         const CTRL: u32 = 0x4;
@@ -435,13 +441,13 @@ impl Cursor {
         }
         let mut step = delta * crate::shared::layout().touchpad_view_sensitivity;
         let this = cursor_mut!(wm, sid, false);
-        if this.axis_event_is_natural(event) {
+        if natural {
             step = -step;
         }
         if crate::shared::layout().touchpad_view_invert {
             step = -step;
         }
-        if (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
+        if event.orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
             this.move_view_drag(0.0, step);
         } else {
             this.move_view_drag(step, 0.0);
@@ -449,7 +455,7 @@ impl Cursor {
         true
     }
 
-    pub unsafe fn view_drag_pinch_begin(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) -> bool {
+    pub fn view_drag_pinch_begin(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) -> bool {
         let this = cursor_mut!(wm, sid, false);
         if this.view_drag.is_some() {
             Cursor::end_view_drag(wm, sid, "pinch");
@@ -628,7 +634,7 @@ impl Cursor {
 
     /// A finger-source axis event over such a popup, emitted to it as whole
     /// wheel notches under a held Ctrl. Returns true when consumed.
-    pub unsafe fn popup_wheel_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, event: *const ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
+    pub fn popup_wheel_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, event: &ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
         let this = cursor_mut!(wm, sid, false);
         const CTRL: u32 = 0x4;
         if delta == 0.0 {
@@ -665,7 +671,7 @@ impl Cursor {
             this.end_popup_wheel("left-popup");
             return false;
         }
-        let vertical = (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
+        let vertical = event.orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
         let axis = if vertical { 1usize } else { 0usize };
         let notches = {
             let Some(p) = this.popup_wheel.as_mut() else { return false };
@@ -680,7 +686,7 @@ impl Cursor {
             let step = POPUP_WHEEL_NOTCH_PX * notches.signum();
             let discrete = 120 * notches.signum() as i32;
             for _ in 0..notches.abs() as i32 {
-                seat.wlr_seat().pointer_notify_axis(time, (*event).orientation, step, discrete, ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_WHEEL, (*event).relative_direction);
+                seat.wlr_seat().pointer_notify_axis(time, event.orientation, step, discrete, ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_WHEEL, event.relative_direction);
                 seat.wlr_seat().pointer_notify_frame();
             }
         }
@@ -780,11 +786,11 @@ impl Cursor {
     /// A finger-source axis event over such a window. Returns true when
     /// consumed (re-emitted as Shift + vertical, or dropped). `target` is
     /// `hscroll_shift_target` at the pointer, looked up by the caller.
-    pub unsafe fn hscroll_shift_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, target: Option<*mut ffi::wlr_surface>, event: *const ffi::wlr_pointer_axis_event, delta: f64, delta_discrete: i32, modifiers: u32) -> bool {
+    pub fn hscroll_shift_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, target: Option<*mut ffi::wlr_surface>, event: &ffi::wlr_pointer_axis_event, delta: f64, delta_discrete: i32, modifiers: u32) -> bool {
         let this = cursor_mut!(wm, sid, false);
         const SHIFT: u32 = 0x1;
         const CTRL: u32 = 0x4;
-        let vertical = (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
+        let vertical = event.orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
         if delta == 0.0 {
             // The fingers lifted. Both axes lift; the first one ends it and
             // the second finds nothing to do -- and neither must reach the
@@ -826,7 +832,7 @@ impl Cursor {
             this.arm_hscroll_shift_timer();
             return true;
         }
-        this.wlr_seat().pointer_notify_axis((*event).time_msec, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL, delta, delta_discrete, (*event).source, (*event).relative_direction);
+        this.wlr_seat().pointer_notify_axis(event.time_msec, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL, delta, delta_discrete, event.source, event.relative_direction);
         this.arm_hscroll_shift_timer();
         true
     }

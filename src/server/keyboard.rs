@@ -138,7 +138,7 @@ impl Keyboard {
         }
 
         if !(*self.device).virtual_device {
-            let seat_groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
+            let seat_groups_head = (*seat).keyboard_groups_head() as *mut crate::server::WlList;
             let mut curr = (*seat_groups_head).next;
             while curr != seat_groups_head {
                 let next = (*curr).next;

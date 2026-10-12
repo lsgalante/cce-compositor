@@ -1089,7 +1089,7 @@ impl Cursor {
     /// exercise the trackpad paths — the compositor's own desk pan and what
     /// X11/Wayland clients receive. A finger scroll ends with a zero-delta
     /// event, which `finger_stop` sends.
-    pub unsafe fn inject_scroll(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, dy: f64, dx: f64, finger: bool, sys: &mut crate::ctx::Sys) {
+    pub fn inject_scroll(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, dy: f64, dx: f64, finger: bool, sys: &mut crate::ctx::Sys) {
         let time = crate::util::msec_timestamp();
         for (delta, orientation) in [
             (dy, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL),
@@ -1098,7 +1098,7 @@ impl Cursor {
             if delta == 0.0 {
                 continue;
             }
-            let mut ev = ffi::wlr_pointer_axis_event {
+            let ev = ffi::wlr_pointer_axis_event {
                 pointer: std::ptr::null_mut(),
                 time_msec: time,
                 source: if finger {
@@ -1111,9 +1111,11 @@ impl Cursor {
                 delta,
                 delta_discrete: if finger { 0 } else { ((delta / 15.0) * 120.0) as i32 },
             };
-            on_axis(wm, sid,
-                &mut ev as *mut ffi::wlr_pointer_axis_event as *mut std::ffi::c_void,
-             sys);
+            let device = crate::cursor::axis::AxisDevice {
+                scroll_factor: 1.0,
+                natural: cursor_mut!(wm, sid, ()).inject_natural,
+            };
+            on_axis(wm, sid, &ev, device, sys);
         }
         let this = cursor_mut!(wm, sid, ());
         // Every libinput axis event is followed by a frame; clients
@@ -1126,13 +1128,13 @@ impl Cursor {
 
     /// The zero-delta event that ends a finger scroll (libinput sends one
     /// when the fingers lift); see `inject_scroll`.
-    pub unsafe fn inject_finger_stop(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, sys: &mut crate::ctx::Sys) {
+    pub fn inject_finger_stop(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, sys: &mut crate::ctx::Sys) {
         let time = crate::util::msec_timestamp();
         for orientation in [
             ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL,
             ffi::wl_pointer_axis_WL_POINTER_AXIS_HORIZONTAL_SCROLL,
         ] {
-            let mut ev = ffi::wlr_pointer_axis_event {
+            let ev = ffi::wlr_pointer_axis_event {
                 pointer: std::ptr::null_mut(),
                 time_msec: time,
                 source: ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER,
@@ -1141,9 +1143,11 @@ impl Cursor {
                 delta: 0.0,
                 delta_discrete: 0,
             };
-            on_axis(wm, sid,
-                &mut ev as *mut ffi::wlr_pointer_axis_event as *mut std::ffi::c_void,
-             sys);
+            let device = crate::cursor::axis::AxisDevice {
+                scroll_factor: 1.0,
+                natural: cursor_mut!(wm, sid, ()).inject_natural,
+            };
+            on_axis(wm, sid, &ev, device, sys);
         }
         // Every libinput axis event is followed by a frame; clients
         // (Xwayland among them) deliver only on the frame, and wlroots
