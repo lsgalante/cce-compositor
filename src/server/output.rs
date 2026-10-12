@@ -1200,6 +1200,12 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 
     if !(*output).wlr_output.is_null() {
         ffi::river_wlr_output_set_data((*output).wlr_output.ptr(), std::ptr::null_mut());
+        // Input devices mapped onto it would keep its address.
+        let server = crate::shared::server_ptr();
+        if !server.is_null() {
+            let wm = &*crate::reentry::wm(server);
+            (*server).input_manager.forget_output(wm, (*output).wlr_output.ptr());
+        }
     }
 
     (*output).wlr_output.take();

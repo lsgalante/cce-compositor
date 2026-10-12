@@ -16,6 +16,10 @@ pub enum TabletToolMode {
 pub struct TabletTool {
     pub wp_tool: *mut ffi::wlr_tablet_v2_tablet_tool,
     pub wlr_cursor: crate::wlr::Wlr<ffi::wlr_cursor>,
+    /// The tool's own theme for `wlr_cursor`'s pencil: the cursor keeps the
+    /// manager it was last given, and the seat's dies with the seat (a
+    /// client's `destroy_seat`) while a tool may still be showing it.
+    pub xcursor_manager: crate::wlr::Wlr<ffi::wlr_xcursor_manager>,
     pub mode: TabletToolMode,
     pub tilt_x: f64,
     pub tilt_y: f64,
@@ -61,11 +65,15 @@ impl TabletTool {
             return Err("Failed to create wp_tool");
         }
 
+        let xcursor_manager = ffi::wlr_xcursor_manager_create(std::ptr::null(), 24);
         let tool = Box::into_raw(Box::new(Self {
             wp_tool,
             // SAFETY: the tool destroys it, in `handle_destroy`, after
             // taking it back out.
             wlr_cursor: crate::wlr::Wlr::from_raw(wlr_cursor),
+            // SAFETY: as `wlr_cursor`, destroyed after it. Null (no pencil)
+            // if the theme could not be created.
+            xcursor_manager: crate::wlr::Wlr::from_raw(xcursor_manager),
             mode: TabletToolMode::Passthrough,
             tilt_x: 0.0,
             tilt_y: 0.0,
@@ -234,9 +242,9 @@ impl TabletTool {
                 (*event).y,
             );
 
-            if let Some(seat) = (*(*tablet).device).sid.and_then(|sid| wm.seats.get(sid)) {
-                self.wlr_cursor.set_xcursor(&seat.cursor.xcursor_manager, c"pencil");
-            }
+            // SAFETY: both are the tool's; `handle_destroy` destroys the
+            // cursor before the manager.
+            self.wlr_cursor.set_xcursor(&self.xcursor_manager, c"pencil");
 
             self.passthrough(wm, tablet);
             self.detach(tablet);
@@ -317,9 +325,8 @@ impl TabletTool {
                 return;
             }
         } else {
-            if let Some(seat) = (*(*tablet).device).sid.and_then(|sid| wm.seats.get(sid)) {
-                self.wlr_cursor.set_xcursor(&seat.cursor.xcursor_manager, c"pencil");
-            }
+            // SAFETY: as in `proximity`.
+            self.wlr_cursor.set_xcursor(&self.xcursor_manager, c"pencil");
         }
 
         ffi::wlr_tablet_v2_tablet_tool_notify_proximity_out(self.wp_tool);
@@ -334,6 +341,10 @@ unsafe extern "C" fn handle_destroy(
     let tool = &mut *tool_ptr;
 
     ffi::wlr_cursor_destroy(tool.wlr_cursor.take());
+    let manager = tool.xcursor_manager.take();
+    if !manager.is_null() {
+        ffi::wlr_xcursor_manager_destroy(manager);
+    }
 
     tool.destroy_listener.disconnect();
     tool.set_cursor_listener.disconnect();

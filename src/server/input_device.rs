@@ -7,6 +7,9 @@ use crate::server::{WlList, wl_list_insert, wl_list_remove};
 
 pub struct InputDeviceConfig {
     pub scroll_factor: f64,
+    /// Null, or a live output: the output's destroy handler drops every
+    /// mapping onto it (`InputManager::forget_output`) before it goes.
+    /// wlroots keeps no watch of its own on a cursor's mapped output.
     pub map_to_output: *mut ffi::wlr_output,
     pub map_to_rectangle: ffi::wlr_box,
 }

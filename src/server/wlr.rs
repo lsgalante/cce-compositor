@@ -292,7 +292,13 @@ impl Wlr<ffi::wlr_cursor> {
 
     /// Show the theme's image `name` from `manager`. Nothing if either is
     /// unset.
-    pub fn set_xcursor(&self, manager: &Wlr<ffi::wlr_xcursor_manager>, name: &CStr) {
+    ///
+    /// # Safety
+    /// `manager` must outlive this cursor's hold on it: wlroots keeps it in
+    /// the cursor's state, and reloads from it on an output scale change or
+    /// a new output, until the image is next reset (`unset_image`, a
+    /// surface, another xcursor) or the cursor is destroyed.
+    pub unsafe fn set_xcursor(&self, manager: &Wlr<ffi::wlr_xcursor_manager>, name: &CStr) {
         if let (Some(c), Some(m)) = (self.live(), manager.live()) {
             unsafe { ffi::wlr_cursor_set_xcursor(c, m, name.as_ptr()) }
         }

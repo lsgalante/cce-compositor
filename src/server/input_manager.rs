@@ -55,6 +55,28 @@ impl Default for InputManager {
 }
 
 impl InputManager {
+    /// Drop every input mapping onto `wlr_output`, which is being destroyed
+    /// — the device's own (`map_to_output`, which tablet tools re-apply on
+    /// every event) and its seat cursor's, which wlroots never clears and
+    /// would read on the next absolute motion or tablet event.
+    ///
+    /// # Safety
+    /// `wlr_output` is still live (its destroy handler, before it lets go).
+    pub unsafe fn forget_output(&mut self, wm: &crate::window_manager::WindowManager, wlr_output: *mut ffi::wlr_output) {
+        if wlr_output.is_null() {
+            return;
+        }
+        for dev in self.devices.ptrs() {
+            if (*dev).config.map_to_output != wlr_output {
+                continue;
+            }
+            (*dev).config.map_to_output = std::ptr::null_mut();
+            if let Some(seat) = (*dev).sid.and_then(|sid| wm.seats.get(sid)) {
+                ffi::wlr_cursor_map_input_to_output(seat.cursor.wlr_cursor.ptr(), (*dev).wlr_device, std::ptr::null_mut());
+            }
+        }
+    }
+
     pub unsafe fn init(&mut self, server: *mut Server, seats: &mut crate::seat::Seats) -> Result<(), &'static str> {
         let wl_server = (*server).wl_server;
 

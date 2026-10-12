@@ -408,11 +408,13 @@ impl Cursor {
         self.stop_xcursor_animation();
         self.anim_timer.remove();
 
-        if !self.xcursor_manager.is_null() {
-            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager.take());
-        }
+        // The cursor first: its state may still hold the manager
+        // (`Wlr::set_xcursor`'s contract).
         if !self.wlr_cursor.is_null() {
             ffi::wlr_cursor_destroy(self.wlr_cursor.take());
+        }
+        if !self.xcursor_manager.is_null() {
+            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager.take());
         }
         self.wlr_seat.take();
     }
@@ -534,7 +536,9 @@ impl Cursor {
         if self.hidden_by_touch {
             return;
         }
-        self.wlr_cursor.set_xcursor(&self.xcursor_manager, name);
+        // SAFETY: both are this cursor's, and `deinit` destroys the
+        // wlr_cursor before the manager.
+        unsafe { self.wlr_cursor.set_xcursor(&self.xcursor_manager, name) };
         // `wlr_cursor_set_xcursor` paints frame 0 and stops there; if this
         // cursor has more frames, take over from here.
         self.start_xcursor_animation(name);
