@@ -101,6 +101,10 @@ pub struct Seat {
     wlr_seat: crate::wlr::Wlr<ffi::wlr_seat>,
     pub cursor: Cursor,
     pub focused: Focus,
+    /// The namespace of the layer surface `focused` names, read while
+    /// `Seat::focus`'s caller vouched for the surface: the status line and
+    /// the chrome check read this, never the surface itself.
+    focused_layer_namespace: Option<String>,
     /// Touchscreens attached to this seat. The seat offers the touch
     /// capability only while there is one: a client that sees it binds
     /// `wl_touch`, and from then on a finger on its surface reaches it as
@@ -206,6 +210,7 @@ impl Seat {
             wlr_seat: crate::wlr::Wlr::from_raw(wlr_seat),
             cursor: Cursor::default(),
             focused: Focus::None,
+            focused_layer_namespace: None,
             touch_devices: 0,
             touch_injected: false,
             relay: crate::input_relay::InputRelay::new(),
@@ -550,6 +555,11 @@ impl Seat {
         }
 
         this.focused = new_focus;
+        this.focused_layer_namespace = match new_focus {
+            // Live: `focus`'s contract.
+            Focus::LayerSurface(s) if !s.is_null() => layer_namespace(s),
+            _ => None,
+        };
         // The overview resize ring is drawn on the focused window only and
         // eases in and out through the border fade — a focus change has to
         // arm that timer or the old ring lingers and the new one waits for an
@@ -935,22 +945,29 @@ impl Seat {
     /// focus as a world window's: keys are delivered rather than eaten, and
     /// hover-to-focus leaves the ring where it is instead of pulling the
     /// keyboard out from under the launcher.
-    pub unsafe fn focus_is_chrome(&self, wm: &crate::window_manager::WindowManager) -> bool {
+    pub fn focus_is_chrome(&self, wm: &crate::window_manager::WindowManager) -> bool {
         match self.focused {
             Focus::Window(id) if wm.windows.contains(id) => matches!(
                 wm.windows.get(id).map(|w| w.tiling_mode),
                 Some(crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay)
             ),
-            Focus::LayerSurface(s) if !s.is_null() => {
-                let wlr_layer_surface = ffi::wlr_layer_surface_v1_try_from_wlr_surface(s);
-                !wlr_layer_surface.is_null()
-                    && !(*wlr_layer_surface).namespace.is_null()
-                    && std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace)
-                        .to_string_lossy()
-                        .starts_with("cce-cloud")
-            }
+            Focus::LayerSurface(_) => self.focused_layer_namespace().is_some_and(|ns| ns.starts_with("cce-cloud")),
             _ => false,
         }
+    }
+
+    /// The namespace of the focused layer surface, if one has the focus.
+    pub fn focused_layer_namespace(&self) -> Option<&str> {
+        self.focused_layer_namespace.as_deref()
+    }
+
+    /// Drop the keyboard focus outright, without `focus`'s side effects:
+    /// for a destroy path that must not be refused (an override-redirect
+    /// window about to be freed).
+    pub fn forget_focus(&mut self) {
+        self.wlr_seat.keyboard_notify_clear_focus();
+        self.focused = Focus::None;
+        self.focused_layer_namespace = None;
     }
 
     /// Focus-follow: pan the camera to a focused Floating/Maximized window —
@@ -1865,3 +1882,14 @@ unsafe extern "C" fn handle_request_set_primary_selection(
     ffi::wlr_seat_set_primary_selection(seat.wlr_seat().ptr(), (*event).source, (*event).serial);
 }
 
+/// A layer surface's namespace, owned.
+///
+/// # Safety
+/// `surface` is live.
+unsafe fn layer_namespace(surface: *mut ffi::wlr_surface) -> Option<String> {
+    let layer = ffi::wlr_layer_surface_v1_try_from_wlr_surface(surface);
+    if layer.is_null() || (*layer).namespace.is_null() {
+        return None;
+    }
+    Some(std::ffi::CStr::from_ptr((*layer).namespace).to_string_lossy().into_owned())
+}

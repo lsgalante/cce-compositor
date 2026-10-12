@@ -213,8 +213,7 @@ fn drop_seat_focus(wm: &mut crate::window_manager::WindowManager, or: *mut Xwayl
         crate::seat::Seat::focus_window(wm, sid, None);
         if held(wm, sid) {
             if let Some(seat) = wm.seats.get_mut(sid) {
-                seat.wlr_seat().keyboard_notify_clear_focus();
-                seat.focused = crate::seat::Focus::None;
+                seat.forget_focus();
             }
         }
     }

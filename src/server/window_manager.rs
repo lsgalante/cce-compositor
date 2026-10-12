@@ -1835,14 +1835,14 @@ impl WindowManager {
         })
     }
 
-    pub fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
+    /// The namespace of the first seat's focused layer surface, if a seat
+    /// focuses one (`Seat::focused_layer_namespace`).
+    pub fn focused_layer_namespace(&self) -> Option<&str> {
         crate::wm_scope!();
-        for seat in self.seats.values() {
-            if let crate::seat::Focus::LayerSurface(s) = seat.focused {
-                return s;
-            }
-        }
-        std::ptr::null_mut()
+        self.seats
+            .values()
+            .find(|seat| matches!(seat.focused, crate::seat::Focus::LayerSurface(_)))
+            .and_then(|seat| seat.focused_layer_namespace())
     }
 
 
@@ -1879,7 +1879,7 @@ impl WindowManager {
             }
     }
 
-    pub unsafe fn update_status(&self) {
+    pub fn update_status(&self) {
         crate::wm_scope!();
         if let Some(ref sender) = self.status_sender {
             let update = crate::status_server::build_status_update(self);

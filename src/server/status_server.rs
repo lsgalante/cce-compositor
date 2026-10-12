@@ -555,7 +555,7 @@ fn format_for_subscription(sub: &Subscription, update: &StatusUpdate) -> String 
     }
 }
 
-pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> StatusUpdate {
+pub fn build_status_update(wm: &crate::window_manager::WindowManager) -> StatusUpdate {
     // `focused_window()` falls back to the most recent real window so the
     // bar doesn't flash while overlay UI (the launcher) briefly holds
     // focus. But an explicit Focus::None (desktop click) is a real,
@@ -563,8 +563,10 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     // must report it honestly instead of showing the last window as if it
     // still had focus.
     let seat_focus_is_none = wm
-        .first_seat()
-        .map(|s| matches!((*s).focused, crate::seat::Focus::None))
+        .seats
+        .values()
+        .next()
+        .map(|s| matches!(s.focused, crate::seat::Focus::None))
         .unwrap_or(false);
     let focused_window = if seat_focus_is_none {
         None
@@ -575,17 +577,7 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     let layout_text = if let Some(focused_window) = focused_window {
         focused_window.tiling_mode.as_str().to_string()
     } else {
-        let focused_layer = wm.focused_layer_surface();
-        let mut is_cce_cloud = false;
-        if !focused_layer.is_null() {
-            let wlr_layer_surface = crate::ffi::wlr_layer_surface_v1_try_from_wlr_surface(focused_layer);
-            if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
-                let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                if ns.starts_with("cce-cloud") {
-                    is_cce_cloud = true;
-                }
-            }
-        }
+        let is_cce_cloud = wm.focused_layer_namespace().is_some_and(|ns| ns.starts_with("cce-cloud"));
         if is_cce_cloud {
             "Overlay".to_string()
         } else {
@@ -594,35 +586,12 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     };
 
     let title_text = if let Some(focused_window) = focused_window {
-        let title_ptr = focused_window.get_title();
-        if !title_ptr.is_null() {
-            std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned()
-        } else {
-            "(none)".to_string()
-        }
+        focused_window.get_title_string().unwrap_or_else(|| "(none)".to_string())
     } else {
-        let focused_layer = wm.focused_layer_surface();
-        if !focused_layer.is_null() {
-            let wlr_layer_surface = crate::ffi::wlr_layer_surface_v1_try_from_wlr_surface(focused_layer);
-            if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
-                std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy().into_owned()
-            } else {
-                "(none)".to_string()
-            }
-        } else {
-            "(none)".to_string()
-        }
+        wm.focused_layer_namespace().unwrap_or("(none)").to_string()
     };
 
-    let seat_ptr = wm.first_seat().unwrap_or(std::ptr::null_mut());
-    let mut super_pressed = false;
-    if !seat_ptr.is_null() {
-        let wlr_keyboard = (*seat_ptr).wlr_seat().keyboard();
-        if !wlr_keyboard.is_null() {
-            let modifiers = crate::ffi::wlr_keyboard_get_modifiers(wlr_keyboard);
-            super_pressed = modifiers & 0x40 != 0;
-        }
-    }
+    let super_pressed = wm.seats.values().next().is_some_and(|seat| seat.wlr_seat().keyboard_modifiers() & 0x40 != 0);
     let modifiers_text = if super_pressed { "super" } else { "none" }.to_string();
 
     StatusUpdate {

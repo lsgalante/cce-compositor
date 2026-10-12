@@ -13,7 +13,7 @@ impl WindowManager {
     /// start the fade timer or they would pop in on the next unrelated
     /// redraw instead of easing — and the zoom paths that set the mode do it
     /// every frame, hence the equality guard.
-    pub unsafe fn set_mode(&mut self, mode: WindowManagerMode) {
+    pub fn set_mode(&mut self, mode: WindowManagerMode) {
         crate::wm_scope!(mut);
         if crate::shared::mode() == mode {
             return;
