@@ -13,12 +13,50 @@
 //! seat used to free itself from inside its own `manage_start`.
 //!
 //! Each seat sits in its own heap allocation, which never moves while the
-//! seat lives: its listeners, its cursor and the `wlr_seat`'s `data` hold
-//! its address. The store keeps raw pointers rather than `Box`es for the
-//! reason the window store gives.
+//! seat lives. The store keeps raw pointers rather than `Box`es for the
+//! reason the window store gives. Nothing outside names a seat by that
+//! address: its listeners are keyed by id, and a wlroots callback handed a
+//! `wlr_seat` finds the seat that holds it ([`Seats::find`]; the
+//! `wlr_seat`'s own `data` is unused). Safe code can swap two seats'
+//! contents (`values_mut`), and the hold moves with them, so the holder
+//! is always the right seat.
+//!
+//! [`place_holding`] does the same without the store, for a teardown that
+//! runs inside window-manager calls (the pointer constraint's): every live
+//! seat's place is also in a per-thread registry, kept by `insert` and
+//! `take`.
 
 use super::{Seat, SeatId};
+use std::cell::RefCell;
 use std::ptr::NonNull;
+
+thread_local! {
+    /// Every live seat's place, for [`place_holding`]: pushed by
+    /// [`Seats::insert`], removed by [`Seats::take`] before the box goes.
+    static PLACES: RefCell<Vec<NonNull<Seat>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The place of the live seat that holds `wlr_seat` (null: `None`), found
+/// without the store: for code that runs inside window-manager calls and
+/// so must not read window-manager memory. `None` too while the seat tears
+/// down: `Seat::destroy` takes its hold before `wlr_seat_destroy`.
+///
+/// # Safety
+/// No reference to a seat is live: this reads each seat's hold.
+pub unsafe fn place_holding(wlr_seat: *mut crate::ffi::wlr_seat) -> Option<*mut Seat> {
+    if wlr_seat.is_null() {
+        return None;
+    }
+    PLACES.with(|places| {
+        places
+            .borrow()
+            .iter()
+            .map(|p| p.as_ptr())
+            // SAFETY: a registered place is a live seat (`take` removes it
+            // before the box goes); the caller holds no reference to one.
+            .find(|&p| unsafe { (*p).wlr_seat.ptr() } == wlr_seat)
+    })
+}
 
 #[derive(Default)]
 pub struct Seats {
@@ -38,6 +76,7 @@ impl Seats {
         // SAFETY: just leaked from a Box, and nothing else holds it yet.
         unsafe { (*ptr.as_ptr()).id = id };
         self.seats.push(Some(ptr));
+        PLACES.with(|places| places.borrow_mut().push(ptr));
         id
     }
 
@@ -48,9 +87,28 @@ impl Seats {
     /// The seat has been torn down (`Seat::destroy`): no keyboard group is
     /// still linked into the list head the drop frees.
     pub unsafe fn take(&mut self, id: SeatId) -> Option<Box<Seat>> {
+        let p = self.seats.get_mut(id.0 as usize)?.take()?;
+        PLACES.with(|places| places.borrow_mut().retain(|&q| q != p));
         // SAFETY: every pointer came from `Box::leak` in `insert`, and
         // leaves the store only here, once.
-        self.seats.get_mut(id.0 as usize)?.take().map(|p| unsafe { Box::from_raw(p.as_ptr()) })
+        Some(unsafe { Box::from_raw(p.as_ptr()) })
+    }
+
+    /// The id of the seat that holds `wlr_seat`, for a wlroots callback
+    /// handed one; `None` for null, for a `wlr_seat` no seat holds, and
+    /// for one whose seat is tearing down (`Seat::destroy` takes the hold
+    /// first). The seat holds its `wlr_seat` privately and the hold moves
+    /// with it, so a safe swap of two seats cannot make this name the
+    /// wrong one.
+    pub fn find(&self, wlr_seat: *mut crate::ffi::wlr_seat) -> Option<SeatId> {
+        if wlr_seat.is_null() {
+            return None;
+        }
+        self.seats.iter().enumerate().find_map(|(i, slot)| {
+            // SAFETY: live while in the store, which this borrows.
+            let seat = unsafe { slot.as_ref()?.as_ref() };
+            (seat.wlr_seat.ptr() == wlr_seat).then_some(SeatId(i as u32))
+        })
     }
 
     /// Every live seat's id, oldest first.
@@ -58,8 +116,8 @@ impl Seats {
         (0..self.seats.len() as u32).map(SeatId).filter(|&id| self.ptr(id).is_some()).collect()
     }
 
-    /// The seat's address, for handing to C as user data and for code that
-    /// still works through raw pointers.
+    /// The seat's address, for code that still works through raw
+    /// pointers.
     pub fn ptr(&self, id: SeatId) -> Option<*mut Seat> {
         self.seats.get(id.0 as usize).copied().flatten().map(|p| p.as_ptr())
     }

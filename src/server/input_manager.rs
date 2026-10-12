@@ -515,9 +515,10 @@ unsafe extern "C" fn handle_new_text_input(listener: *mut ffi::wl_listener, data
 unsafe extern "C" fn handle_new_input_method(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let im = &mut *crate::listener_owner!(listener, InputManager, new_input_method);
     let input_method = data as *mut ffi::wlr_input_method_v2;
-    // Fallback to default seat if input_method.seat has no data set yet
-    let Some(sid) = Seat::id_of((*input_method).seat).or(im.default_seat) else { return };
-    crate::input_relay::InputRelay::new_input_method(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, input_method);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    // The seat holding the input method's `wlr_seat`, else the default seat.
+    let Some(sid) = wm.seats.find((*input_method).seat).or(im.default_seat) else { return };
+    crate::input_relay::InputRelay::new_input_method(wm, sid, input_method);
 }
 
 unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -548,9 +549,9 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
     let wlr_device = &mut (*virtual_keyboard).keyboard.base as *mut ffi::wlr_input_device;
 
     // Honor the seat the client bound the virtual keyboard to, like input
-    // methods do; fall back to the default seat if it carries no Seat data.
+    // methods do; fall back to the default seat if no seat holds it.
     let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-    let bound = Seat::id_of((*virtual_keyboard).seat);
+    let bound = wm.seats.find((*virtual_keyboard).seat);
     let seat = bound.or(im.default_seat).and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
     if seat.is_null() {
         return;

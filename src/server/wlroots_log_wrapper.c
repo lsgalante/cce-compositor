@@ -414,14 +414,6 @@ void river_wlr_pointer_constraint_default_region(struct wlr_pointer_constraint_v
 	}
 }
 
-void *river_wlr_seat_get_data(struct wlr_seat *seat) {
-	return seat->data;
-}
-
-void river_wlr_seat_set_data(struct wlr_seat *seat, void *data) {
-	seat->data = data;
-}
-
 struct wl_signal *river_wlr_seat_get_request_set_cursor_signal(struct wlr_seat *seat) {
 	return &seat->events.request_set_cursor;
 }

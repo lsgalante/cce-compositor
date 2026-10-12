@@ -159,7 +159,7 @@ impl PointerConstraint {
 
         ffi::river_wlr_pointer_constraint_default_region(wlr_constraint);
 
-        let Some(sid) = Seat::id_of((*wlr_constraint).seat) else { return constraint };
+        let Some(sid) = wm.seats.find((*wlr_constraint).seat) else { return constraint };
         let Some(seat) = wm.seats.get_mut(sid) else { return constraint };
         let focused = seat.wlr_seat().keyboard_focused_surface();
         if !focused.is_null() && focused == (*wlr_constraint).surface && seat.cursor.constraint().is_null() {
@@ -182,7 +182,7 @@ impl PointerConstraint {
 
     /// The seat this constraint is for, if it is still in the store.
     fn seat<'a>(&self, wm: &'a crate::window_manager::WindowManager) -> Option<&'a Seat> {
-        self.wlr_constraint.seat_id().and_then(|sid| wm.seats.get(sid))
+        wm.seats.find(self.wlr_constraint.seat()).and_then(|sid| wm.seats.get(sid))
     }
 
     pub fn maybe_activate(&mut self, wm: &crate::window_manager::WindowManager) {
@@ -367,22 +367,18 @@ impl PointerConstraint {
     }
 }
 
-unsafe fn river_wlr_seat_get_data_safe(wlr_seat: *mut ffi::wlr_seat) -> *mut Seat {
-    if wlr_seat.is_null() {
-        std::ptr::null_mut()
-    } else {
-        ffi::river_wlr_seat_get_data(wlr_seat) as *mut Seat
-    }
-}
-
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, destroy_listener) as *mut PointerConstraint;
     let constraint = &mut *constraint_ptr;
-    // The seat through wlroots' pointer, not the store: this also runs while
-    // the server tears down, with no window manager to take. The wlroots
-    // constraint is the signal's data.
+    // The seat that holds the constraint's `wlr_seat`, found without the
+    // store: this runs inside window-manager calls (a oneshot deactivation
+    // in `with_held`, `wlr_seat_destroy` in `Seat::destroy`) and while the
+    // server tears down. A seat tearing down is not found (its hold is
+    // taken first): it is going, cursor and all. The wlroots constraint is
+    // the signal's data.
     let wlr_constraint = data as *mut ffi::wlr_pointer_constraint_v1;
-    let seat = if wlr_constraint.is_null() { std::ptr::null_mut() } else { river_wlr_seat_get_data_safe((*wlr_constraint).seat) };
+    let seat = if wlr_constraint.is_null() { None } else { crate::seat::place_holding((*wlr_constraint).seat) };
+    let seat = seat.unwrap_or(std::ptr::null_mut());
 
     if constraint.is_active() {
         if !seat.is_null() {
@@ -432,8 +428,7 @@ unsafe extern "C" fn handle_node_destroy(listener: *mut ffi::wl_listener, _data:
     // A scene node goes inside window-manager calls (a window unmapping),
     // so this must not take the window manager: the seat comes from
     // wlroots' pointer.
-    let wlr = (*constraint_ptr).wlr_constraint.ptr();
-    let seat = if wlr.is_null() { std::ptr::null_mut() } else { river_wlr_seat_get_data_safe((*wlr).seat) };
+    let seat = crate::seat::place_holding((*constraint_ptr).wlr_constraint.seat()).unwrap_or(std::ptr::null_mut());
     (*constraint_ptr).deactivate_with(seat.as_ref());
     // The borrow above has ended; a oneshot constraint may go here.
     flush_deactivation(constraint_ptr);

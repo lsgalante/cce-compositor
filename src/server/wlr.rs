@@ -691,14 +691,10 @@ impl Wlr<ffi::wlr_pointer_constraint_v1> {
         self.live().map_or(std::ptr::null_mut(), |c| unsafe { (*c).surface })
     }
 
-    /// The seat the constraint is for, if it is still in the store's hands:
-    /// wlroots destroys a seat's constraints inside `wlr_seat_destroy`, while
-    /// the seat's data is still its `Seat`.
-    pub fn seat_id(&self) -> Option<crate::seat::SeatId> {
-        let c = self.live()?;
-        // SAFETY: a live constraint's seat is live; its data is the `Seat`
-        // box or null (`Seat::id_of`).
-        unsafe { crate::seat::Seat::id_of((*c).seat) }
+    /// The `wlr_seat` the constraint is for (null once let go), to find its
+    /// seat by (`Seats::find`, `seat::place_holding`).
+    pub fn seat(&self) -> *mut ffi::wlr_seat {
+        self.live().map_or(std::ptr::null_mut(), |c| unsafe { (*c).seat })
     }
 
     /// Whether it locks the pointer (rather than confining it).

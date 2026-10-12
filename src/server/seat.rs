@@ -4,7 +4,7 @@ use crate::cursor::Cursor;
 
 #[path = "seat/store.rs"]
 mod store;
-pub use store::Seats;
+pub use store::{place_holding, Seats};
 
 /// Names a seat in [`Seats`]: an index into its slots, which are never
 /// reused.
@@ -229,22 +229,6 @@ impl Seat {
         &self.wlr_seat
     }
 
-    /// The id of the seat a `wlr_seat` belongs to, from the user data
-    /// `Seat::create` gave it; `None` for a null `wlr_seat` or one without
-    /// a seat. For wlroots callbacks that are handed a `wlr_seat`: look
-    /// the seat up in `wm.seats` with the id rather than keeping the
-    /// pointer.
-    ///
-    /// # Safety
-    /// `wlr_seat` is null or live, and its data null or a live `Seat`.
-    pub unsafe fn id_of(wlr_seat: *mut ffi::wlr_seat) -> Option<SeatId> {
-        if wlr_seat.is_null() {
-            return None;
-        }
-        let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut Seat;
-        (!seat.is_null()).then(|| (*seat).id)
-    }
-
     pub unsafe fn create(server: *mut Server, seats: &mut Seats, name: &str) -> Result<*mut Self, &'static str> {
         let name_c = std::ffi::CString::new(name).unwrap();
         let wlr_seat = ffi::wlr_seat_create((*server).wl_server, name_c.as_ptr());
@@ -291,7 +275,9 @@ impl Seat {
 
         ffi::wl_list_init(&mut *(*seat).keyboard_groups);
 
-        ffi::river_wlr_seat_set_data(wlr_seat, seat as *mut _);
+        // No user data on the `wlr_seat`: a callback handed one finds its
+        // seat as the one that holds it (`Seats::find`), which a safe swap
+        // of two seats cannot make name the wrong one or a freed one.
 
         // Initialize Cursor
         let output_layout = crate::shared::handles().output_layout.ptr();
@@ -1841,17 +1827,22 @@ unsafe extern "C" fn handle_drag_destroy(
     listener: *mut ffi::wl_listener,
     _data: *mut std::ffi::c_void,
 ) {
-    let seat = &mut *listener_seat_ptr!(listener, drag_destroy);
+    let sid = listener_seat!(listener, drag_destroy);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let Some(seat) = wm.seats.get_mut(sid) else { return };
     seat.drag_destroy.disconnect();
+    let (drag, cursor_sid) = (seat.drag, seat.cursor.sid());
 
-    match seat.drag {
+    // No seat borrow across `update_state`: it can flush a oneshot pointer
+    // constraint, whose destroy handler reads the seat by its place.
+    match drag {
         DragState::None => unreachable!(),
-        DragState::Pointer => {
-            crate::cursor::Cursor::update_state(&mut *crate::reentry::wm(crate::shared::server_ptr()), seat.cursor.sid());
-        }
+        DragState::Pointer => crate::cursor::Cursor::update_state(wm, cursor_sid),
         DragState::Touch => {}
     }
-    seat.drag = DragState::None;
+    if let Some(seat) = wm.seats.get_mut(sid) {
+        seat.drag = DragState::None;
+    }
 }
 
 unsafe extern "C" fn handle_request_set_primary_selection(

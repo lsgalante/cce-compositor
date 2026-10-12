@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::seat::Seat;
 
 #[repr(C)]
 pub struct TextInput {
@@ -21,7 +20,7 @@ unsafe impl crate::listener::Anchored for TextInput {}
 
 impl TextInput {
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, wlr_text_input: *mut ffi::wlr_text_input_v3) -> Result<(), &'static str> {
-        let Some(sid) = Seat::id_of((*wlr_text_input).seat) else { return Err("Seat is null") };
+        let Some(sid) = wm.seats.find((*wlr_text_input).seat) else { return Err("Seat is gone") };
         let Some(seat) = wm.seats.get_mut(sid) else { return Err("Seat is gone") };
         log::debug!("new text input on seat {}", seat.wlr_seat().name());
 
@@ -59,8 +58,9 @@ impl TextInput {
 
 /// The seat id a text input's events are for, and the window manager.
 unsafe fn entry(text_input: *mut TextInput) -> Option<(&'static mut crate::window_manager::WindowManager, crate::seat::SeatId)> {
-    let sid = Seat::id_of((*(*text_input).wlr_text_input).seat)?;
-    Some((&mut *crate::reentry::wm(crate::shared::server_ptr()), sid))
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let sid = wm.seats.find((*(*text_input).wlr_text_input).seat)?;
+    Some((wm, sid))
 }
 
 unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

@@ -1011,7 +1011,7 @@ unsafe extern "C" fn handle_request_move(
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xdg_toplevel_move_event;
-    let Some(sid) = crate::seat::Seat::id_of((*(*event).seat).seat) else { return };
+    let Some(sid) = wm.seats.find((*(*event).seat).seat) else { return };
     let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat().ptr()) else { return };
 
     if ffi::wlr_seat_validate_pointer_grab_serial(wlr_seat, std::ptr::null_mut(), (*event).serial) {
@@ -1088,7 +1088,7 @@ unsafe extern "C" fn handle_request_resize(
         return;
     }
 
-    let Some(sid) = crate::seat::Seat::id_of((*(*event).seat).seat) else { return };
+    let Some(sid) = wm.seats.find((*(*event).seat).seat) else { return };
     let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat().ptr()) else { return };
 
     if ffi::wlr_seat_validate_pointer_grab_serial(wlr_seat, std::ptr::null_mut(), (*event).serial) {

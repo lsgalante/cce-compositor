@@ -1,6 +1,5 @@
 use crate::ffi;
 use crate::tablet::Tablet;
-use crate::seat::Seat;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TabletToolMode {
@@ -67,9 +66,9 @@ impl TabletTool {
             return Err("Failed to create wlr_cursor");
         }
 
-        if Seat::id_of(wlr_seat).is_none() {
+        if wlr_seat.is_null() {
             ffi::wlr_cursor_destroy(wlr_cursor);
-            return Err("Seat data is null");
+            return Err("no wlr_seat");
         }
         let output_layout = crate::shared::handles().output_layout.ptr();
 
