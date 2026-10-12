@@ -612,7 +612,12 @@ impl Wlr<ffi::wlr_xwayland_surface> {
     /// X reports it mapped — about one X11 window in ten created while
     /// another was closing (2026-10-12). Called once the map listener is
     /// connected, this does what that missed commit would have.
-    pub fn map_if_buffered(&self) {
+    ///
+    /// # Safety
+    /// Mapping runs the surface's map listeners, and the compositor's take
+    /// the window manager themselves (`reentry::wm`): no window-manager
+    /// borrow may be live, unless no such listener is connected yet.
+    pub unsafe fn map_if_buffered(&self) {
         let surface = self.surface();
         if surface.is_null() {
             return;

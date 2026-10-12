@@ -391,12 +391,13 @@ impl XwaylandWindow {
         (*raw).request_minimize.connect(&mut (*xsurface).events.request_minimize, handle_request_minimize);
 
         if !(*xsurface).surface.is_null() {
+            // Mapped before the map listener exists (no handler of ours runs,
+            // so `wm` stays the one borrow), then handled below with `wm`
+            // like a surface that was already mapped.
+            (*raw).xsurface().map_if_buffered();
             handle_associate_impl(raw);
             if ffi::river_wlr_surface_is_mapped((*xsurface).surface) {
                 handle_map_impl(wm, raw);
-            } else {
-                // Through the listener just connected.
-                (*raw).xsurface().map_if_buffered();
             }
         }
 
@@ -697,6 +698,7 @@ unsafe fn handle_destroy_impl(wm: &mut crate::window_manager::WindowManager, xwi
 unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, associate);
     handle_associate_impl(xwindow);
+    // An entry point: no window-manager borrow is live.
     (*xwindow).xsurface().map_if_buffered();
 }
 

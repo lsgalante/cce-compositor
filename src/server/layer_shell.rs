@@ -39,6 +39,13 @@ impl LayerShell {
 
     /// Schedule keyboard focus for the topmost mapped exclusive layer
     /// surface on every seat, or clear an exclusive focus none claims.
+    ///
+    /// A surface queued for closing (`close_later`) is passed over, and a
+    /// scheduled focus naming one is dropped: it is still mapped until the
+    /// idle callback closes it, and before the close was deferred it went
+    /// inside the arrange that found it too large, so it never held focus.
+    /// Focused in between, its close would take the keyboard from the
+    /// window and fire the app-exit camera reaction.
     pub fn check_exclusive_focus(seats: &mut crate::seat::Seats) {
         let layers = [
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
@@ -52,7 +59,7 @@ impl LayerShell {
                 // has run since.
                 let layer_surface = unsafe { &*layer_surface };
                 let wlr = &layer_surface.wlr_layer_surface;
-                if wlr.is_mapped() && wlr.keyboard_interactive() == exclusive {
+                if wlr.is_mapped() && wlr.keyboard_interactive() == exclusive && !closing(layer_surface.ref_key) {
                     to_focus = Some(layer_surface.ref_key);
                     break 'outer;
                 }
@@ -63,6 +70,8 @@ impl LayerShell {
             if let Some(key) = to_focus {
                 seat.layer_shell.scheduled_focus = LayerShellSeatFocus::Exclusive(key);
             } else if matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
+                seat.layer_shell.scheduled_focus = LayerShellSeatFocus::None;
+            } else if matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::NonExclusive(key) if closing(key)) {
                 seat.layer_shell.scheduled_focus = LayerShellSeatFocus::None;
             }
         }
@@ -111,6 +120,11 @@ thread_local! {
     /// and an output scale change (any client can make one) took the
     /// compositor down that way (2026-10-12).
     static OVERSIZED: std::cell::RefCell<Vec<Key>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether layer surface `key` is queued for closing.
+fn closing(key: Key) -> bool {
+    OVERSIZED.with(|o| o.borrow().contains(&key))
 }
 
 /// Close layer surface `key` once the current dispatch is over.

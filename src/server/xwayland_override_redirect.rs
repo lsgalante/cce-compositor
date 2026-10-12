@@ -72,12 +72,11 @@ impl XwaylandOverrideRedirect {
         (*raw).dissociate.connect(&mut (*xsurface).events.dissociate, handle_dissociate);
 
         if !(*xsurface).surface.is_null() {
+            // Mapped before the map listener exists, as `XwaylandWindow::create`.
+            (*raw).xsurface().map_if_buffered();
             handle_associate_impl(raw);
             if ffi::river_wlr_surface_is_mapped((*xsurface).surface) {
                 handle_map_impl(wm, raw);
-            } else {
-                // Through the listener just connected.
-                (*raw).xsurface().map_if_buffered();
             }
         }
 
@@ -250,6 +249,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, associate);
     handle_associate_impl(or);
+    // An entry point: no window-manager borrow is live.
     (*or).xsurface().map_if_buffered();
 }
 

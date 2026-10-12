@@ -1045,8 +1045,10 @@ children, and re-enabling the output crashed in `draw_grid`'s
   which is shown in the status bar instead (`cce-status-interface`'s
   `cce-xembed-tray`).
   **An X11 surface that already holds a buffer is mapped when it is paired**
-  (`Wlr::map_if_buffered`, from both `associate` handlers and the create
-  paths; since 2026-10-12). wlroots maps an Xwayland surface only on a
+  (`Wlr::map_if_buffered`, from both `associate` handlers, and in the
+  create paths BEFORE the map listener is connected — mapping runs the
+  listeners, which take the window manager, so it is `unsafe`; since
+  2026-10-12). wlroots maps an Xwayland surface only on a
   commit AFTER the XWM pairs it with its X window, and the Wayland and X
   connections race: about one X11 window in ten created while another was
   closing had committed its only buffer first, and a window that never
