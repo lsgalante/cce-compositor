@@ -408,7 +408,9 @@ impl Cursor {
                     }
                     SceneNodeDataVal::LayerSurface(layer_surface) => {
                         if crate::cursor::layer_takes_click_focus(layer_surface) {
-                            crate::seat::Seat::focus(wm, sid, Focus::LayerSurface(result.surface));
+                            // The layer's root surface, as the click path does.
+                            let root = (*(*layer_surface).wlr_layer_surface).surface;
+                            crate::seat::Seat::focus(wm, sid, Focus::LayerSurface(root));
                         }
                     }
                     _ => {}

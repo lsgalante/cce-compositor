@@ -69,6 +69,8 @@ pub struct SeatOp {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Focus {
     None,
+    /// A layer surface's ROOT wl_surface (never a popup's or a
+    /// subsurface's): its unmap clears the focus by comparing the root.
     LayerSurface(*mut ffi::wlr_surface),
     Window(crate::window::WindowId),
     LockSurface(*mut crate::lock_manager::LockSurface),

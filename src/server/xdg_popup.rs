@@ -166,7 +166,11 @@ unsafe fn update_blur(popup: *mut XdgPopup, base_surface: *mut ffi::wlr_xdg_surf
 }
 
 /// The server a popup belongs to, found through its parent's scene node —
-/// a window or a shell surface. Null when the parent is neither.
+/// a window or a layer surface. Null when the parent is neither.
+///
+/// The layer arm was missing from the Rust port until 2026-10-12, so a layer
+/// surface's popup (a bar's tray menu) was never positioned nor sent its
+/// first configure (`handle_reposition` returned here), and never mapped.
 unsafe fn popup_server(popup: *mut XdgPopup) -> *mut crate::server::Server {
     let parent_tree = ffi::river_wlr_scene_tree_get_parent((*popup).tree.raw());
     if parent_tree.is_null() {
@@ -174,7 +178,8 @@ unsafe fn popup_server(popup: *mut XdgPopup) -> *mut crate::server::Server {
     }
     match crate::scene_node_data::SceneNodeData::from_node(parent_tree as *mut ffi::wlr_scene_node) {
         Some(node_data) => match node_data.data {
-            crate::scene_node_data::SceneNodeDataVal::Window(_) => crate::shared::server_ptr(),
+            crate::scene_node_data::SceneNodeDataVal::Window(_)
+            | crate::scene_node_data::SceneNodeDataVal::LayerSurface(_) => crate::shared::server_ptr(),
             _ => std::ptr::null_mut(),
         },
         None => std::ptr::null_mut(),

@@ -880,7 +880,12 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
                 SceneNodeDataVal::LayerSurface(layer_surface) => {
                     clicked_something = true;
                     if layer_takes_click_focus(layer_surface) {
-                        crate::seat::Seat::focus(wm, sid, Focus::LayerSurface(result.surface));
+                        // The layer's ROOT surface, not the hit one: a click
+                        // on its popup or subsurface would otherwise leave the
+                        // seat naming a surface the layer's unmap never clears
+                        // (it compares the root), freed with the popup.
+                        let root = (*(*layer_surface).wlr_layer_surface).surface;
+                        crate::seat::Seat::focus(wm, sid, Focus::LayerSurface(root));
                     }
                 }
                 SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
