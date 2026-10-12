@@ -65,6 +65,7 @@ void river_init_wlroots_log(enum wlr_log_importance importance) {
 #include <wlr/backend.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_input_method_v2.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_data_device.h>
 
 struct wlr_surface *river_scene_node_get_surface(struct wlr_scene_node *node) {
@@ -386,6 +387,18 @@ struct wl_signal *river_wlr_cursor_get_tablet_tool_button_signal(struct wlr_curs
 
 const char *river_wlr_seat_get_name(struct wlr_seat *seat) {
 	return seat->name;
+}
+
+struct wl_signal *river_wlr_pointer_constraints_get_new_constraint_signal(struct wlr_pointer_constraints_v1 *constraints) {
+	return &constraints->events.new_constraint;
+}
+
+/* river's PointerConstraint.create: a constraint asked for with no region
+ * covers the surface's whole input region. */
+void river_wlr_pointer_constraint_default_region(struct wlr_pointer_constraint_v1 *constraint) {
+	if (!pixman_region32_not_empty(&constraint->current.region)) {
+		pixman_region32_copy(&constraint->region, &constraint->surface->input_region);
+	}
 }
 
 void *river_wlr_seat_get_data(struct wlr_seat *seat) {

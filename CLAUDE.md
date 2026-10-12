@@ -446,6 +446,41 @@ are safe now, and they dereference the impl it names, so it may change only
 through `set_impl` and `impl_destroying`. `Cursor::x` / `y` are safe and read
 0 before `init` and after `deinit`.
 
+### Pointer lock / confine and relative motion (since 2026-10-11)
+
+`zwp_pointer_constraints_v1` and `zwp_relative_pointer_manager_v1` were
+created as globals but never wired in the Rust port, so clients (games,
+3D tools, Xwayland's grabs) were silently ignored. Now:
+
+- `InputManager` listens for new constraints
+  (`river_wlr_pointer_constraints_get_new_constraint_signal`, a C-shim
+  accessor: the manager struct is opaque to bindgen) and
+  `PointerConstraint::create` takes it; an empty region defaults to the
+  surface's input region (`river_wlr_pointer_constraint_default_region`).
+- `Cursor::constraint` is the constraint of the keyboard-focused surface:
+  `Seat::sync_pointer_constraint` drops the old one and picks up the new
+  one on every keyboard focus change (`Seat::focus`,
+  `keyboard_enter_or_leave`). It ACTIVATES only once the pointer is over its
+  region (`maybe_activate`, from `passthrough`).
+- A constraint holds only while `pointer_constraint::applies_now()`:
+  Normal mode, no Super-held adjust. Overview, adjust and ops deactivate it
+  (the client hears unlocked/unconfined; a persistent one re-activates).
+- `on_motion` (and `on_motion_absolute`, which turns the absolute position
+  into a delta as river does) sends relative motion FIRST, then a locked
+  pointer stays put and a confined one is clamped. `confine` works from the
+  pointer's ACTUAL layout position and the surface's scale (dest width vs
+  surface width: an X11 window under `xwayland_hidpi` is drawn at half its
+  buffer size), never from the activation position — a compositor warp in
+  between made the stored one stale and the pointer walked out.
+- While a constraint is active, `passthrough` skips the border band
+  (resize/move handles inside the window edge): a confined pointer pressed
+  against the edge must stay the client's.
+- The node-destroy and destroy handlers reach the seat through wlroots'
+  pointer, not the store (a scene node dies inside window-manager calls).
+- Test: scratchpad-style `verify/clients` `pointer-lock --mode lock|confine`
+  prints locked/unlocked/confined/unconfined, motion, leave and running
+  relative sums.
+
 ### wlroots objects a field keeps: `crate::wlr::Wlr<T>` (since 2026-10-11)
 
 The same pattern as `Timer`, for wlroots objects (`wlr.rs`): `Wlr<T>` is

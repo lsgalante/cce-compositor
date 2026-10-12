@@ -26,6 +26,7 @@ pub struct InputManager {
     pub new_input_method: crate::listener::Listener,
     pub new_virtual_pointer_listener: crate::listener::Listener,
     pub new_virtual_keyboard_listener: crate::listener::Listener,
+    pub new_pointer_constraint: crate::listener::Listener,
 
     /// Pending deferred pointer-focus re-evaluation (see
     /// [`InputManager::schedule_pointer_refresh`]); null when none. One idle
@@ -61,11 +62,13 @@ impl InputManager {
         self.idle_notifier = ffi::wlr_idle_notifier_v1_create(wl_server);
         crate::shared::handles().idle_notifier.set(self.idle_notifier);
         self.relative_pointer_manager = ffi::wlr_relative_pointer_manager_v1_create(wl_server);
+        crate::shared::handles().relative_pointer.set(self.relative_pointer_manager);
         self.pointer_gestures = ffi::wlr_pointer_gestures_v1_create(wl_server);
         crate::shared::handles().pointer_gestures.set(self.pointer_gestures);
         self.virtual_pointer_manager = ffi::wlr_virtual_pointer_manager_v1_create(wl_server);
         self.virtual_keyboard_manager = ffi::wlr_virtual_keyboard_manager_v1_create(wl_server);
         self.pointer_constraints = ffi::wlr_pointer_constraints_v1_create(wl_server);
+        crate::shared::handles().pointer_constraints.set(self.pointer_constraints);
         self.input_method_manager = ffi::wlr_input_method_manager_v2_create(wl_server);
         self.text_input_manager = ffi::wlr_text_input_manager_v3_create(wl_server);
         self.tablet_manager = ffi::wlr_tablet_v2_create(wl_server);
@@ -93,6 +96,14 @@ impl InputManager {
         
         let signal = ffi::river_wlr_backend_get_new_input_signal((*server).backend);
         self.new_input_listener.connect(signal, handle_new_input);
+
+        // Pointer lock / confine (zwp_pointer_constraints_v1).
+        if !self.pointer_constraints.is_null() {
+            self.new_pointer_constraint.connect(
+                ffi::river_wlr_pointer_constraints_get_new_constraint_signal(self.pointer_constraints),
+                handle_new_pointer_constraint,
+            );
+        }
 
         // Connect new_text_input listener
         self.new_text_input.connect(&mut (*self.text_input_manager).events.new_text_input, handle_new_text_input);
@@ -188,6 +199,7 @@ impl InputManager {
         self.new_input_method.disconnect();
         self.new_virtual_pointer_listener.disconnect();
         self.new_virtual_keyboard_listener.disconnect();
+        self.new_pointer_constraint.disconnect();
         log::info!("[deinit] InputManager::deinit finished");
     }
 }
@@ -372,6 +384,11 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
 
     // Attach device to the default seat
     (*im.default_seat).attach_device(device);
+}
+
+unsafe extern "C" fn handle_new_pointer_constraint(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    crate::pointer_constraint::PointerConstraint::create(wm, data as *mut ffi::wlr_pointer_constraint_v1);
 }
 
 unsafe extern "C" fn handle_new_text_input(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

@@ -436,8 +436,9 @@ impl Cursor {
 
     pub unsafe fn update_state(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         let this = cursor_mut!(wm, sid, ());
-        if !this.constraint.is_null() {
-            (*this.constraint).update_state(wm);
+        let constraint = this.constraint;
+        if !constraint.is_null() {
+            (*constraint).update_state(wm);
         }
         let this = cursor_mut!(wm, sid, ());
         this.update_hovered();
@@ -652,11 +653,11 @@ impl Cursor {
 
     pub unsafe fn op_start_pointer(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         let this = cursor_mut!(wm, sid, ());
-        if !this.constraint.is_null() {
-            if let crate::pointer_constraint::PointerConstraintState::Active { .. } = (*this.constraint).state {
-                (*this.constraint).deactivate();
-            }
+        let constraint = this.constraint;
+        if !constraint.is_null() {
+            (*constraint).deactivate(wm);
         }
+        let this = cursor_mut!(wm, sid, ());
 
         log::debug!("entering cursor mode op");
         this.wlr_seat.pointer_notify_clear_focus();
@@ -724,6 +725,18 @@ impl Cursor {
     }
 
     pub unsafe fn passthrough(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, time_msec: u32) {
+        // A pointer constraint takes hold once the pointer is over its
+        // region (river does this here too).
+        let constraint = cursor_mut!(wm, sid, ()).constraint;
+        if !constraint.is_null() {
+            (*constraint).maybe_activate(wm);
+        }
+        // While a constraint holds the pointer it is the client's: the
+        // compositor's border band (resize/move handles inside the window
+        // edge) must not take it, or a confined pointer pressed against the
+        // edge loses the client.
+        let constrained = !constraint.is_null()
+            && matches!((*constraint).state, crate::pointer_constraint::PointerConstraintState::Active { .. });
         let stores = wm.stores();
         let this = cursor_mut!(wm, sid, ());
         let lx = this.x();
@@ -829,7 +842,8 @@ impl Cursor {
                     // No mode gate: the band scales with the window
                     // (get_border_zone is zoom-aware), so the resize/move
                     // controls reveal and work at any zoom, not just 1.
-                    if !status
+                    if !constrained
+                        && !status
                         && !wallpaper
                         && mode != crate::tiling::TilingMode::Popup
                         && mode != crate::tiling::TilingMode::Fullscreen
@@ -1312,9 +1326,33 @@ pub(crate) unsafe fn on_motion(wm: &mut crate::window_manager::WindowManager, si
     let mut dx = (*event).delta_x;
     let mut dy = (*event).delta_y;
 
-    if !cursor.constraint.is_null() {
-        (*cursor.constraint).confine(&mut dx, &mut dy);
+    // Relative motion goes out before any constraint applies: a client
+    // that locked the pointer (a game) steers by exactly these deltas.
+    let relative = crate::shared::handles().relative_pointer.ptr();
+    if !relative.is_null() {
+        ffi::wlr_relative_pointer_manager_v1_send_relative_motion(
+            relative,
+            cursor.wlr_seat.ptr(),
+            (*event).time_msec as u64 * 1000,
+            (*event).delta_x,
+            (*event).delta_y,
+            (*event).unaccel_dx,
+            (*event).unaccel_dy,
+        );
     }
+    let constraint = cursor.constraint;
+    if !constraint.is_null() && matches!((*constraint).state, crate::pointer_constraint::PointerConstraintState::Active { .. }) {
+        if !crate::pointer_constraint::applies_now() {
+            (*constraint).deactivate(wm);
+        } else if (*constraint).locks() {
+            // Locked: the pointer stays where it is.
+            return;
+        } else {
+            let cursor = cursor_mut!(wm, sid, ());
+            (*constraint).confine(cursor.x(), cursor.y(), &mut dx, &mut dy);
+        }
+    }
+    let cursor = cursor_mut!(wm, sid, ());
 
     // Real libinput motion collapses the compositor to ~3fps, while an injected
     // warp at the SAME event rate sustains ~58fps — so the cost is somewhere in
@@ -1382,7 +1420,42 @@ pub(crate) unsafe fn on_motion_absolute(wm: &mut crate::window_manager::WindowMa
     } else {
         &mut (*(*event).pointer).base as *mut ffi::wlr_input_device
     };
-    ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor.ptr(), wlr_device, (*event).x, (*event).y);
+    // As river does: the absolute position becomes a delta, so relative
+    // motion goes out and a pointer constraint applies exactly as for a
+    // relative device.
+    let (mut lx, mut ly) = (0.0, 0.0);
+    ffi::wlr_cursor_absolute_to_layout_coords(cursor.wlr_cursor.ptr(), wlr_device, (*event).x, (*event).y, &mut lx, &mut ly);
+    let (cx, cy) = (cursor.x(), cursor.y());
+    let (mut dx, mut dy) = (lx - cx, ly - cy);
+    let relative = crate::shared::handles().relative_pointer.ptr();
+    if !relative.is_null() {
+        ffi::wlr_relative_pointer_manager_v1_send_relative_motion(
+            relative,
+            cursor.wlr_seat.ptr(),
+            (*event).time_msec as u64 * 1000,
+            dx,
+            dy,
+            dx,
+            dy,
+        );
+    }
+    let constraint = cursor.constraint;
+    if !constraint.is_null() && matches!((*constraint).state, crate::pointer_constraint::PointerConstraintState::Active { .. }) {
+        if !crate::pointer_constraint::applies_now() {
+            (*constraint).deactivate(wm);
+        } else if (*constraint).locks() {
+            return;
+        } else {
+            (*constraint).confine(cx, cy, &mut dx, &mut dy);
+        }
+    }
+    let cursor = cursor_mut!(wm, sid, ());
+    if dx != lx - cx || dy != ly - cy {
+        // Confined: the clamped delta, not the device's position.
+        cursor.wlr_cursor.move_by(dx, dy);
+    } else {
+        ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor.ptr(), wlr_device, (*event).x, (*event).y);
+    }
     cursor.update_hovered();
     cursor.update_drag_icons();
 

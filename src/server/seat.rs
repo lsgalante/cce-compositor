@@ -699,6 +699,7 @@ impl Seat {
         }
         let target_surface = new_focus.surface(wm);
         crate::input_relay::InputRelay::focus(wm, sid, target_surface);
+        Seat::sync_pointer_constraint(wm, sid, target_surface);
     }
 
     /// Give this seat a keyboard if the backend never supplied one, so that
@@ -811,6 +812,29 @@ impl Seat {
             this.wlr_seat.keyboard_notify_clear_focus();
         }
         crate::input_relay::InputRelay::focus(wm, sid, target_surface);
+        Seat::sync_pointer_constraint(wm, sid, target_surface);
+    }
+
+    /// Keyboard focus moved to `target_surface`: a pointer constraint on
+    /// another surface stops (river's `Seat.focus`), and one the new
+    /// surface's client asked for becomes the cursor's, to take hold once
+    /// the pointer is over its region (`PointerConstraint::maybe_activate`).
+    unsafe fn sync_pointer_constraint(wm: &mut crate::window_manager::WindowManager, sid: SeatId, target_surface: *mut ffi::wlr_surface) {
+        let Some(seat) = wm.seats.get_mut(sid) else { return };
+        let current = seat.cursor.constraint;
+        if !current.is_null() && (*(*current).wlr_constraint).surface != target_surface {
+            log::info!("deactivating pointer constraint for surface, keyboard focus lost");
+            (*current).deactivate(wm);
+            seat_mut!(wm, sid).cursor.constraint = std::ptr::null_mut();
+        }
+        let seat = seat_mut!(wm, sid);
+        let constraints = crate::shared::handles().pointer_constraints.ptr();
+        if !target_surface.is_null() && !constraints.is_null() && seat.cursor.constraint.is_null() {
+            let wlr_constraint = ffi::wlr_pointer_constraints_v1_constraint_for_surface(constraints, target_surface, seat.wlr_seat.ptr());
+            if !wlr_constraint.is_null() && !(*wlr_constraint).data.is_null() {
+                seat.cursor.constraint = (*wlr_constraint).data as *mut crate::pointer_constraint::PointerConstraint;
+            }
+        }
     }
 
     /// Returns true when the seat is to be destroyed (a client asked for

@@ -187,6 +187,8 @@ struct wl_signal *river_wlr_cursor_get_tablet_tool_tip_signal(struct wlr_cursor 
 struct wl_signal *river_wlr_cursor_get_tablet_tool_button_signal(struct wlr_cursor *cursor);
 
 const char *river_wlr_seat_get_name(struct wlr_seat *seat);
+struct wl_signal *river_wlr_pointer_constraints_get_new_constraint_signal(struct wlr_pointer_constraints_v1 *constraints);
+void river_wlr_pointer_constraint_default_region(struct wlr_pointer_constraint_v1 *constraint);
 void *river_wlr_seat_get_data(struct wlr_seat *seat);
 void river_wlr_seat_set_data(struct wlr_seat *seat, void *data);
 struct wl_signal *river_wlr_seat_get_request_set_cursor_signal(struct wlr_seat *seat);
