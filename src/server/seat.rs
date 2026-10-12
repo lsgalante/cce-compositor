@@ -230,7 +230,7 @@ impl Seat {
         ffi::wl_list_init(&mut (*seat).keyboard_groups);
 
         ffi::river_wlr_seat_set_data(wlr_seat, seat as *mut _);
-        (*seat).relay.init(seat);
+        (*seat).relay.init();
 
         // Initialize Cursor
         let output_layout = (*server).om.output_layout;

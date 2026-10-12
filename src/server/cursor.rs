@@ -21,8 +21,9 @@ mod border_zone;
 pub use border_zone::*;
 
 pub struct Cursor {
-    pub seat: *mut Seat,
-    /// The id of `seat`, for the `(wm, sid)` cursor functions.
+    /// The id of the seat this cursor belongs to, for the `(wm, sid)`
+    /// cursor functions. The cursor keeps no pointer to its seat: it is a
+    /// field of it, so reaching it through one alongside `wm` aliased.
     pub sid: crate::seat::SeatId,
     pub wlr_cursor: crate::wlr::Wlr<ffi::wlr_cursor>,
     /// The seat's `wlr_seat`, held from `init` to `deinit` (which the seat
@@ -209,7 +210,6 @@ pub struct Cursor {
 impl Default for Cursor {
     fn default() -> Self {
         Self {
-            seat: std::ptr::null_mut(),
             sid: crate::seat::SeatId(u32::MAX),
             wlr_cursor: crate::wlr::Wlr::null(),
             wlr_seat: crate::wlr::Wlr::null(),
@@ -303,7 +303,6 @@ impl Cursor {
             return Err("Failed to create wlr_xcursor_manager");
         }
 
-        self.seat = seat;
         self.sid = (*seat).id;
         self.wlr_cursor.set(wlr_cursor);
         // Released in `deinit`, which `Seat::destroy` runs before it
@@ -495,7 +494,8 @@ impl Cursor {
 
         // If this cursor belongs to the default seat, update the Xwayland cursor to match the theme.
         let handles = crate::shared::handles();
-        if self.seat == handles.default_seat.get() {
+        let default_seat = handles.default_seat.get();
+        if !default_seat.is_null() && (*default_seat).id == self.sid {
             if !handles.xwayland.ptr().is_null() {
                 ffi::wlr_xcursor_manager_load(xcursor_manager, 1.0);
                 let wlr_xcursor = ffi::wlr_xcursor_manager_get_xcursor(
@@ -1568,10 +1568,8 @@ pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowMana
 }
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, frame_listener);
-
-    let seat = &mut *cursor.seat;
-    seat.wlr_seat.pointer_notify_frame();
+    let cursor = &*crate::container_of!(listener, Cursor, frame_listener);
+    cursor.wlr_seat.pointer_notify_frame();
 }
 
 /// Animated-xcursor tick. `data` is the `Cursor`, which lives inline in a

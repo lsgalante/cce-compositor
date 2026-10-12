@@ -7,7 +7,6 @@ use crate::seat::Seat;
 
 #[repr(C)]
 pub struct InputRelay {
-    pub seat: *mut Seat,
     pub text_inputs: crate::registry::Registry<TextInput>,
     pub input_method: *mut ffi::wlr_input_method_v2,
     pub input_popups: ffi::wl_list,
@@ -25,11 +24,10 @@ pub struct InputRelay {
 }
 
 impl InputRelay {
-    /// A relay with no seat yet; `init` finishes it once it is in place
+    /// A relay not yet in place; `init` finishes it once it is
     /// (the popup list head must not move after it is initialised).
     pub fn new() -> Self {
         InputRelay {
-            seat: std::ptr::null_mut(),
             text_inputs: crate::registry::Registry::new(),
             input_method: std::ptr::null_mut(),
             // SAFETY: a zeroed wl_list is a valid not-yet-initialised head;
@@ -45,8 +43,7 @@ impl InputRelay {
         }
     }
 
-    pub unsafe fn init(&mut self, seat: *mut Seat) {
-        self.seat = seat;
+    pub unsafe fn init(&mut self) {
         ffi::wl_list_init(&mut self.input_popups);
     }
 

@@ -210,8 +210,7 @@ pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid:
     let cursor = cursor_mut!(wm, sid, ());
     let (cx, cy) = (cursor.x(), cursor.y());
     let target = if is_finger { Cursor::hscroll_shift_target(wm, cx, cy) } else { None };
-    let cursor = cursor_mut!(wm, sid, ());
-    if is_finger && cursor.hscroll_shift_axis(target, event, delta, delta_discrete, modifiers) {
+    if is_finger && Cursor::hscroll_shift_axis(wm, sid, target, event, delta, delta_discrete, modifiers) {
         return;
     }
 
@@ -372,20 +371,19 @@ impl Cursor {
     }
 
     /// Move the synthetic pointer by layout pixels.
-    unsafe fn move_view_drag(&mut self, dx: f64, dy: f64) {
+    fn move_view_drag(&mut self, dx: f64, dy: f64) {
         let Some(d) = self.view_drag.as_mut() else { return };
-        let seat = &mut *self.seat;
         let time = crate::util::msec_timestamp();
         if !d.button_down {
-            seat.wlr_seat.pointer_notify_button(time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED);
-            seat.wlr_seat.pointer_notify_frame();
+            self.wlr_seat.pointer_notify_button(time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED);
+            self.wlr_seat.pointer_notify_frame();
             d.button_down = true;
         }
         d.sx += dx * d.ratio;
         d.sy += dy * d.ratio;
         let (sx, sy) = (d.sx, d.sy);
-        seat.wlr_seat.pointer_notify_motion(time, sx, sy);
-        seat.wlr_seat.pointer_notify_frame();
+        self.wlr_seat.pointer_notify_motion(time, sx, sy);
+        self.wlr_seat.pointer_notify_frame();
         self.arm_view_drag_timer();
     }
 
@@ -468,7 +466,7 @@ impl Cursor {
         Cursor::begin_view_drag(wm, sid, BTN_RIGHT, true)
     }
 
-    pub unsafe fn view_drag_pinch_update(&mut self, scale: f64) -> bool {
+    pub fn view_drag_pinch_update(&mut self, scale: f64) -> bool {
         let Some(d) = self.view_drag.as_ref() else { return false };
         if !d.from_pinch {
             return false;
@@ -597,15 +595,14 @@ impl Cursor {
     /// reads keep seeing the user's real keys. Shared by `PopupWheel`
     /// (Ctrl) and `HScrollShift` (Shift).
     unsafe fn hold_synthetic_modifier(&mut self, key: u32, xkb_name: &[u8], down: bool) {
-        let seat = &mut *self.seat;
         let time = crate::util::msec_timestamp();
         let state = if down {
             ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
         } else {
             ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
         };
-        seat.wlr_seat.keyboard_notify_key(time, key, state);
-        let kb = seat.wlr_seat.keyboard();
+        self.wlr_seat.keyboard_notify_key(time, key, state);
+        let kb = self.wlr_seat.keyboard();
         if !kb.is_null() && !(*kb).keymap.is_null() {
             let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, xkb_name.as_ptr() as *const _);
             if idx != ffi::XKB_MOD_INVALID {
@@ -615,7 +612,7 @@ impl Cursor {
                 if down {
                     mods.depressed |= 1u32 << idx;
                 }
-                seat.wlr_seat.keyboard_notify_modifiers(&mut mods);
+                self.wlr_seat.keyboard_notify_modifiers(&mut mods);
             }
         }
     }
@@ -788,7 +785,8 @@ impl Cursor {
     /// A finger-source axis event over such a window. Returns true when
     /// consumed (re-emitted as Shift + vertical, or dropped). `target` is
     /// `hscroll_shift_target` at the pointer, looked up by the caller.
-    pub unsafe fn hscroll_shift_axis(&mut self, target: Option<*mut ffi::wlr_surface>, event: *const ffi::wlr_pointer_axis_event, delta: f64, delta_discrete: i32, modifiers: u32) -> bool {
+    pub unsafe fn hscroll_shift_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, target: Option<*mut ffi::wlr_surface>, event: *const ffi::wlr_pointer_axis_event, delta: f64, delta_discrete: i32, modifiers: u32) -> bool {
+        let this = cursor_mut!(wm, sid, false);
         const SHIFT: u32 = 0x1;
         const CTRL: u32 = 0x4;
         let vertical = (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
@@ -796,45 +794,45 @@ impl Cursor {
             // The fingers lifted. Both axes lift; the first one ends it and
             // the second finds nothing to do -- and neither must reach the
             // client as a stray horizontal event.
-            if self.hscroll_shift.is_some() {
-                self.end_hscroll_shift("lift");
+            if this.hscroll_shift.is_some() {
+                this.end_hscroll_shift("lift");
                 return true;
             }
             return false;
         }
         if modifiers & (SHIFT | CTRL) != 0 {
-            if self.hscroll_shift.is_some() {
-                self.end_hscroll_shift("modifier");
+            if this.hscroll_shift.is_some() {
+                this.end_hscroll_shift("modifier");
             }
             return false;
         }
-        if self.hscroll_shift.is_none() {
+        if this.hscroll_shift.is_none() {
             if vertical {
                 return false;
             }
             let Some(surface) = target else { return false };
-            let seat = &mut *self.seat;
-            seat.ensure_synthetic_keyboard();
-            let repeat = seat.wlr_seat.keyboard_repeat_info();
-            seat.wlr_seat.set_keyboard_repeat_info(0, 0);
+            seat_mut!(wm, sid, false).ensure_synthetic_keyboard();
+            let this = cursor_mut!(wm, sid, false);
+            let repeat = this.wlr_seat.keyboard_repeat_info();
+            this.wlr_seat.set_keyboard_repeat_info(0, 0);
             log::info!("[HScrollShift] begin on surface {:p}", surface);
-            self.hscroll_shift = Some(HScrollShift { surface, shift_down: false, repeat });
-            self.hold_hscroll_shift(true);
+            this.hscroll_shift = Some(HScrollShift { surface, shift_down: false, repeat });
+            this.hold_hscroll_shift(true);
         }
-        let focused = self.wlr_seat.pointer_focused_surface();
-        if matches!(&self.hscroll_shift, Some(h) if focused != h.surface) {
-            self.end_hscroll_shift("left-window");
+        let this = cursor_mut!(wm, sid, false);
+        let focused = this.wlr_seat.pointer_focused_surface();
+        if matches!(&this.hscroll_shift, Some(h) if focused != h.surface) {
+            this.end_hscroll_shift("left-window");
             return false;
         }
         if vertical {
             // Off-axis drift mid-gesture: under the held Shift it would
             // scroll sideways too. Swallow it.
-            self.arm_hscroll_shift_timer();
+            this.arm_hscroll_shift_timer();
             return true;
         }
-        let seat = &mut *self.seat;
-        seat.wlr_seat.pointer_notify_axis((*event).time_msec, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL, delta, delta_discrete, (*event).source, (*event).relative_direction);
-        self.arm_hscroll_shift_timer();
+        this.wlr_seat.pointer_notify_axis((*event).time_msec, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL, delta, delta_discrete, (*event).source, (*event).relative_direction);
+        this.arm_hscroll_shift_timer();
         true
     }
 

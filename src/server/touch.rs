@@ -592,7 +592,7 @@ impl Cursor {
                     EdgeProgress::NotEdge => Cursor::edge_release(wm, sid, time_msec, sys),
                     EdgeProgress::Fire => {
                         this.touch_claim = Claim::Edge { id, edge, start, fired: true };
-                        let mods = gesture_mods(&*seat_mut!(wm, sid, ()));
+                        let mods = gesture_mods(&seat_mut!(wm, sid, ()).wlr_seat);
                         if let Some((action, command)) = gesture_bind("edge", 1, mods, |d| d == edge.name()) {
                             log::info!("touch: edge_{} fired {action:?}", edge.name());
                             run_gesture_action(wm, action, command.as_deref());
@@ -737,7 +737,7 @@ impl Cursor {
             (Edge::Top, ly - y0 < EDGE_ZONE && beyond_is_empty(lx, y0 - 1.0)),
             (Edge::Bottom, y1 - ly <= EDGE_ZONE && beyond_is_empty(lx, y1 + 1.0)),
         ];
-        let mods = gesture_mods(&*self.seat);
+        let mods = gesture_mods(&self.wlr_seat);
         candidates
             .into_iter()
             .filter(|&(_, near)| near)
@@ -756,7 +756,7 @@ impl Cursor {
 
     /// Fire a pinch bind if the spread has gone far enough; once per gesture.
     unsafe fn touch_pinch(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, fingers: u32, scale: f64) -> MultiKind {
-        let mods = gesture_mods(&*seat_mut!(wm, sid, MultiKind::Undecided));
+        let mods = gesture_mods(&seat_mut!(wm, sid, MultiKind::Undecided).wlr_seat);
         match gesture_bind("pinch", fingers, mods, |d| pinch_hits(d, scale)) {
             Some((action, command)) => {
                 log::info!("touch: pinch fired {action:?}");

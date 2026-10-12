@@ -715,9 +715,13 @@ so are the pointer event handlers `on_motion`, `on_motion_absolute`,
 cursor_mut!(wm, sid);` (or `this`) and `let seat = seat_mut!(wm, sid);` are
 taken where needed and again after each `wm` call. Never hold both: the
 cursor IS a field of the seat; read `seat.cursor` when a statement needs
-both. `Cursor::sid` is the cursor's seat's id (set in `Cursor::init`), and
-the wlroots entry points read only it from the listener
-(`(*container_of!(..)).sid`). Lookups that only need the pointer position
+both. `Cursor::sid` is the cursor's seat's id (set in `Cursor::init`);
+the cursor has NO seat pointer (removed 2026-10-11) — what a `&self`
+cursor method needs of the seat is its `wlr_seat`, which the cursor holds
+itself (`Cursor::wlr_seat`), and anything more makes it a `(wm, sid)`
+function (`hscroll_shift_axis` for `ensure_synthetic_keyboard`). The relay
+has none either. The wlroots entry points read only the cursor's `sid`
+(and `wlr_seat`) from the listener (`(*container_of!(..)).sid`). Lookups that only need the pointer position
 take it as arguments (`view_drag_target`, `hscroll_shift_target`), and
 `ccectl`'s `for_each_cursor` / `for_each_seat_touch` hand closures a
 `SeatId`. The input-method relay is the same: `InputRelay::focus`,
