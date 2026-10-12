@@ -324,14 +324,23 @@ static INPUT_DEVICE_INTERFACE: ffi::river_input_device_v1_interface = ffi::river
     map_to_rectangle: Some(input_device_map_to_rectangle),
 };
 
+// Every request has a handler: libwayland aborts the whole compositor on a
+// null entry, and a client can send any request on an inert object (one it
+// sent before it saw the event that made the object inert, or a repeat).
 static INPUT_DEVICE_INERT_INTERFACE: ffi::river_input_device_v1_interface = ffi::river_input_device_v1_interface {
     destroy: Some(input_device_destroy),
-    assign_to_seat: None,
-    set_repeat_info: None,
-    set_scroll_factor: None,
-    map_to_output: None,
-    map_to_rectangle: None,
+    assign_to_seat: Some(inert_assign_to_seat),
+    set_repeat_info: Some(inert_set_repeat_info),
+    set_scroll_factor: Some(inert_set_scroll_factor),
+    map_to_output: Some(inert_map_to_output),
+    map_to_rectangle: Some(inert_map_to_rectangle),
 };
+
+unsafe extern "C" fn inert_assign_to_seat(_: *mut ffi::wl_client, _: *mut ffi::wl_resource, _name: *const std::os::raw::c_char) {}
+unsafe extern "C" fn inert_set_repeat_info(_: *mut ffi::wl_client, _: *mut ffi::wl_resource, _rate: i32, _delay: i32) {}
+unsafe extern "C" fn inert_set_scroll_factor(_: *mut ffi::wl_client, _: *mut ffi::wl_resource, _factor: ffi::wl_fixed_t) {}
+unsafe extern "C" fn inert_map_to_output(_: *mut ffi::wl_client, _: *mut ffi::wl_resource, _output: *mut ffi::wl_resource) {}
+unsafe extern "C" fn inert_map_to_rectangle(_: *mut ffi::wl_client, _: *mut ffi::wl_resource, _x: i32, _y: i32, _w: i32, _h: i32) {}
 
 unsafe extern "C" fn input_device_destroy(
     _client: *mut ffi::wl_client,

@@ -111,11 +111,24 @@ static LIBINPUT_CONFIG_INTERFACE: ffi::river_libinput_config_v1_interface = ffi:
     create_accel_config: Some(libinput_config_create_accel_config),
 };
 
+// Every request has a handler: libwayland aborts the whole compositor on a
+// null entry, and a client can send any request on an inert object (one it
+// sent before it saw the event that made the object inert, or a repeat).
 static LIBINPUT_CONFIG_INERT_INTERFACE: ffi::river_libinput_config_v1_interface = ffi::river_libinput_config_v1_interface {
-    stop: None,
+    stop: Some(libinput_config_inert_stop),
     destroy: Some(libinput_config_inert_destroy),
-    create_accel_config: None,
+    create_accel_config: Some(libinput_config_inert_create_accel_config),
 };
+
+unsafe extern "C" fn libinput_config_inert_stop(_client: *mut ffi::wl_client, _resource: *mut ffi::wl_resource) {}
+
+unsafe extern "C" fn libinput_config_inert_create_accel_config(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _id: u32,
+    _profile: u32,
+) {
+}
 
 unsafe extern "C" fn libinput_config_stop(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputConfigObject;

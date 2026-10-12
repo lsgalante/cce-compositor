@@ -254,16 +254,24 @@ static XKB_KEYBOARD_INTERFACE: ffi::river_xkb_keyboard_v1_interface = ffi::river
     numlock_disable: Some(xkb_keyboard_numlock_disable),
 };
 
+// Every request has a handler: libwayland aborts the whole compositor on a
+// null entry, and a client can send any request on an inert object (one it
+// sent before it saw the event that made the object inert, or a repeat).
 static XKB_KEYBOARD_INERT_INTERFACE: ffi::river_xkb_keyboard_v1_interface = ffi::river_xkb_keyboard_v1_interface {
     destroy: Some(xkb_keyboard_destroy),
-    set_keymap: None,
-    set_layout_by_index: None,
-    set_layout_by_name: None,
-    capslock_enable: None,
-    capslock_disable: None,
-    numlock_enable: None,
-    numlock_disable: None,
+    set_keymap: Some(inert_set_keymap),
+    set_layout_by_index: Some(inert_set_layout_by_index),
+    set_layout_by_name: Some(inert_set_layout_by_name),
+    capslock_enable: Some(inert_toggle),
+    capslock_disable: Some(inert_toggle),
+    numlock_enable: Some(inert_toggle),
+    numlock_disable: Some(inert_toggle),
 };
+
+unsafe extern "C" fn inert_set_keymap(_: *mut ffi::wl_client, _: *mut ffi::wl_resource, _keymap: *mut ffi::wl_resource) {}
+unsafe extern "C" fn inert_set_layout_by_index(_: *mut ffi::wl_client, _: *mut ffi::wl_resource, _index: i32) {}
+unsafe extern "C" fn inert_set_layout_by_name(_: *mut ffi::wl_client, _: *mut ffi::wl_resource, _name: *const std::os::raw::c_char) {}
+unsafe extern "C" fn inert_toggle(_: *mut ffi::wl_client, _: *mut ffi::wl_resource) {}
 
 unsafe extern "C" fn xkb_keyboard_destroy(
     _client: *mut ffi::wl_client,

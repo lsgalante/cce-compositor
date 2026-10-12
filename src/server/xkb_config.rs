@@ -147,11 +147,27 @@ static XKB_CONFIG_INTERFACE: ffi::river_xkb_config_v1_interface = ffi::river_xkb
     create_keymap: Some(xkb_config_create_keymap),
 };
 
+// Every request has a handler: libwayland aborts the whole compositor on a
+// null entry, and a client can send any request on an inert object (one it
+// sent before it saw the event that made the object inert, or a repeat).
 static XKB_CONFIG_INERT_INTERFACE: ffi::river_xkb_config_v1_interface = ffi::river_xkb_config_v1_interface {
-    stop: None,
+    stop: Some(xkb_config_inert_stop),
     destroy: Some(xkb_config_inert_destroy),
-    create_keymap: None,
+    create_keymap: Some(xkb_config_inert_create_keymap),
 };
+
+unsafe extern "C" fn xkb_config_inert_stop(_client: *mut ffi::wl_client, _resource: *mut ffi::wl_resource) {}
+
+unsafe extern "C" fn xkb_config_inert_create_keymap(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _id: u32,
+    fd: i32,
+    _format: u32,
+) {
+    // The fd is the handler's to close.
+    libc::close(fd);
+}
 
 unsafe extern "C" fn xkb_config_stop(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let obj = ffi::wl_resource_get_user_data(resource) as *mut XkbConfigObject;

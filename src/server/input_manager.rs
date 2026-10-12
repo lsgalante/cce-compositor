@@ -258,12 +258,24 @@ static INPUT_MANAGER_INTERFACE: ffi::river_input_manager_v1_interface = ffi::riv
     destroy_seat: Some(input_manager_destroy_seat),
 };
 
+// Every request has a handler: libwayland aborts the whole compositor on a
+// null entry, and a client can send any request on an inert object (one it
+// sent before it saw the event that made the object inert, or a repeat).
 static INPUT_MANAGER_INERT_INTERFACE: ffi::river_input_manager_v1_interface = ffi::river_input_manager_v1_interface {
-    stop: None,
+    stop: Some(input_manager_inert_stop),
     destroy: Some(input_manager_inert_destroy),
-    create_seat: None,
-    destroy_seat: None,
+    create_seat: Some(input_manager_inert_seat_request),
+    destroy_seat: Some(input_manager_inert_seat_request),
 };
+
+unsafe extern "C" fn input_manager_inert_stop(_client: *mut ffi::wl_client, _resource: *mut ffi::wl_resource) {}
+
+unsafe extern "C" fn input_manager_inert_seat_request(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _name: *const std::os::raw::c_char,
+) {
+}
 
 unsafe extern "C" fn input_manager_stop(
     _client: *mut ffi::wl_client,

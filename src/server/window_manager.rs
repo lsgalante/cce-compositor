@@ -2590,21 +2590,35 @@ unsafe extern "C" fn handle_server_destroy(
 // The global is kept for one request: clients (cce-ui, cce-cloud) bind it to
 // call `get_cce_toplevel`. The river-style management requests it once
 // carried (manage/render handshakes, shell surfaces, exit_session) were for an
-// external window-manager client, and the built-in policy replaced that; they
-// are unimplemented here, so a client sending one is a protocol error rather
-// than, say, a way for any client to end the session.
+// external window-manager client, and the built-in policy replaced that; a
+// client sending one gets a protocol error (and is disconnected) rather than,
+// say, a way for any client to end the session. Each still needs a handler:
+// libwayland aborts the compositor on a null entry.
 unsafe extern "C" fn wm_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     ffi::wl_resource_destroy(resource);
 }
 
+unsafe extern "C" fn wm_unimplemented(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+    ffi::wl_resource_post_error(resource, 0, c"request not implemented by cce".as_ptr());
+}
+
+unsafe extern "C" fn wm_unimplemented_get_shell_surface(
+    client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    _id: u32,
+    _surface: *mut ffi::wl_resource,
+) {
+    wm_unimplemented(client, resource);
+}
+
 static WM_INTERFACE: ffi::zcce_window_manager_v1_interface = ffi::zcce_window_manager_v1_interface {
-    stop: None,
+    stop: Some(wm_unimplemented),
     destroy: Some(wm_destroy),
-    manage_finish: None,
-    manage_dirty: None,
-    render_finish: None,
-    get_shell_surface: None,
-    exit_session: None,
+    manage_finish: Some(wm_unimplemented),
+    manage_dirty: Some(wm_unimplemented),
+    render_finish: Some(wm_unimplemented),
+    get_shell_surface: Some(wm_unimplemented_get_shell_surface),
+    exit_session: Some(wm_unimplemented),
     get_cce_toplevel: Some(crate::cce_window_management::cce_wm_get_cce_toplevel),
 };
 
