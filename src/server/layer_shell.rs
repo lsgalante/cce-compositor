@@ -39,40 +39,114 @@ impl LayerShell {
 
     /// Schedule keyboard focus for the topmost mapped exclusive layer
     /// surface on every seat, or clear an exclusive focus none claims.
-    pub unsafe fn check_exclusive_focus(seats: &mut crate::seat::Seats) {
+    pub fn check_exclusive_focus(seats: &mut crate::seat::Seats) {
         let layers = [
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP,
         ];
-        let mut to_focus: *mut LayerSurface = std::ptr::null_mut();
-
+        let exclusive = ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE;
+        let mut to_focus: Option<Key> = None;
         'outer: for &layer in &layers {
-            let tree = crate::shared::scene().layer_surface_tree(layer);
-            let children_head = ffi::river_scene_tree_get_children(tree) as *mut WlList;
-            let mut curr = (*children_head).prev;
-            while curr != children_head {
-                let prev = (*curr).prev;
-                let node = ffi::river_scene_node_from_children_link(curr as *mut ffi::wl_list);
-                if let Some(node_data) = SceneNodeData::from_node(node) {
-                    if let SceneNodeDataVal::LayerSurface(layer_surface) = node_data.data {
-                        let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
-                        if ffi::river_wlr_surface_is_mapped((*wlr_layer_surface).surface) &&
-                           (*wlr_layer_surface).current.keyboard_interactive == ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE {
-                            to_focus = layer_surface;
-                            break 'outer;
-                        }
-                    }
+            for layer_surface in stacked(layer).into_iter().rev() {
+                // SAFETY: just read from the scene (`stacked`), and nothing
+                // has run since.
+                let layer_surface = unsafe { &*layer_surface };
+                let wlr = &layer_surface.wlr_layer_surface;
+                if wlr.is_mapped() && wlr.keyboard_interactive() == exclusive {
+                    to_focus = Some(layer_surface.ref_key);
+                    break 'outer;
                 }
-                curr = prev;
             }
         }
 
         for seat in seats.values_mut() {
-            if !to_focus.is_null() {
-                seat.layer_shell.scheduled_focus = LayerShellSeatFocus::Exclusive((*to_focus).ref_key);
+            if let Some(key) = to_focus {
+                seat.layer_shell.scheduled_focus = LayerShellSeatFocus::Exclusive(key);
             } else if matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
                 seat.layer_shell.scheduled_focus = LayerShellSeatFocus::None;
             }
+        }
+    }
+}
+
+/// The layer surfaces drawn in scene layer `layer` (`zwlr_layer_shell_v1`),
+/// bottom of the stack first, copied out. Each is live until something
+/// destroys a layer surface: the scene helper destroys a surface's tree,
+/// and with it the node data naming the surface, before the surface's own
+/// destroy handler frees it, so a surface a child of the layer's tree names
+/// is live now.
+fn stacked(layer: u32) -> Vec<*mut LayerSurface> {
+    let mut out = Vec::new();
+    let tree = crate::shared::scene().layer_surface_tree(layer);
+    if tree.is_null() {
+        return out;
+    }
+    // SAFETY: the shared scene's layer trees live as long as the scene; the
+    // walk only reads the children list and each child's node data.
+    unsafe {
+        let head = ffi::river_scene_tree_get_children(tree) as *mut WlList;
+        let mut curr = (*head).next;
+        while curr != head {
+            let node = ffi::river_scene_node_from_children_link(curr as *mut ffi::wl_list);
+            if let Some(node_data) = SceneNodeData::from_node(node) {
+                if let SceneNodeDataVal::LayerSurface(layer_surface) = node_data.data {
+                    if !layer_surface.is_null() {
+                        out.push(layer_surface);
+                    }
+                }
+            }
+            curr = (*curr).next;
+        }
+    }
+    out
+}
+
+thread_local! {
+    /// Layer surfaces `send_configures` found too large — an exclusive
+    /// zone that would leave less than half the output — to be closed by
+    /// `close_oversized`. Closing one inside the walk ran its unmap
+    /// handler, which arranged the output again from inside the walk: that
+    /// inner walk could close a second surface the outer one was about to
+    /// visit, and the outer one then read the freed node. Three top bars
+    /// and an output scale change (any client can make one) took the
+    /// compositor down that way (2026-10-12).
+    static OVERSIZED: std::cell::RefCell<Vec<Key>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Close layer surface `key` once the current dispatch is over.
+fn close_later(key: Key) {
+    let first = OVERSIZED.with(|o| {
+        let mut o = o.borrow_mut();
+        let first = o.is_empty();
+        if !o.contains(&key) {
+            o.push(key);
+        }
+        first
+    });
+    let event_loop = crate::shared::event_loop();
+    if first && !event_loop.is_null() && crate::shared::pending().loop_live() {
+        // SAFETY: the shared loop is live (`loop_live`), and the callback
+        // takes no data; an idle source frees itself once it has run.
+        unsafe { ffi::wl_event_loop_add_idle(event_loop, Some(close_oversized), std::ptr::null_mut()) };
+    }
+}
+
+/// The idle callback `close_later` arms: close each surface still alive.
+unsafe extern "C" fn close_oversized(_data: *mut std::ffi::c_void) {
+    let keys = OVERSIZED.with(|o| std::mem::take(&mut *o.borrow_mut()));
+    let server = crate::shared::server_ptr();
+    if server.is_null() {
+        return;
+    }
+    for key in keys {
+        // Looked up afresh for each, with no borrow held across the close:
+        // closing runs the surface's unmap and destroy handlers, which reach
+        // the window manager themselves.
+        let Some(layer_surface) = (*crate::reentry::wm(server)).layer_surfaces.get(key) else { continue };
+        let wlr = (*layer_surface).wlr_layer_surface.ptr();
+        if !wlr.is_null() {
+            log::info!("closing a layer surface whose exclusive zone leaves less than half the output");
+            ffi::wlr_layer_surface_v1_destroy(wlr);
         }
     }
 }
@@ -143,9 +217,17 @@ impl LayerSurfaces {
 }
 
 pub struct LayerSurface {
-    pub ref_key: Key,
-    pub wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
-    pub scene_layer_surface: *mut ffi::wlr_scene_layer_surface_v1,
+    /// Its key in `wm.layer_surfaces`; private, because the destroy handler
+    /// takes out the entry it names.
+    ref_key: Key,
+    /// Private, as every `Wlr` field reachable through `&mut` is: one moved
+    /// out of here would be a hold the destroy handler never clears.
+    wlr_layer_surface: crate::wlr::Wlr<ffi::wlr_layer_surface_v1>,
+    /// wlroots' scene helper for the surface, which lives as long as the
+    /// layer surface does. Private: `send_configures` hands it to wlroots.
+    scene_layer_surface: *mut ffi::wlr_scene_layer_surface_v1,
+    /// The helper's tree, watched: the helper destroys it with the surface.
+    tree: crate::scene_handle::SceneTree,
     pub popup_tree: crate::scene_handle::SceneTree,
     /// Where the open/close dissolve currently stands, 0.0 (invisible) to
     /// 1.0. Applied to the whole scene subtree, so the scenefx backdrop blur
@@ -188,8 +270,9 @@ impl LayerSurface {
 
         let layer_surface = Box::into_raw(Box::new(LayerSurface {
             ref_key: Key { generation: 0, index: 0 },
-            wlr_layer_surface,
+            wlr_layer_surface: crate::wlr::Wlr::from_raw(wlr_layer_surface),
             scene_layer_surface,
+            tree: crate::scene_handle::SceneTree::watch((*scene_layer_surface).tree),
             popup_tree: crate::scene_handle::SceneTree::adopt(popup_tree),
             opacity: 1.0,
             opacity_target: 1.0,
@@ -224,22 +307,39 @@ impl LayerSurface {
         Ok(layer_surface)
     }
 
-    pub unsafe fn destroy_popups(&mut self) {
-        let popups_list = &mut (*self.wlr_layer_surface).popups as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*popups_list).next;
-        while curr != popups_list {
-            let next = (*curr).next;
-            let wlr_xdg_popup = crate::container_of!(curr, ffi::wlr_xdg_popup, link);
-            ffi::wlr_xdg_popup_destroy(wlr_xdg_popup);
-            curr = next;
-        }
+    /// Its key in `wm.layer_surfaces`.
+    pub fn key(&self) -> Key {
+        self.ref_key
+    }
+
+    /// The wlroots layer surface.
+    pub fn wlr_layer_surface(&self) -> &crate::wlr::Wlr<ffi::wlr_layer_surface_v1> {
+        &self.wlr_layer_surface
+    }
+
+    /// Whether its namespace marks it as cce-cloud chrome — the launcher
+    /// and the desktop/app context menus. These are screen-anchored popups
+    /// that stay interactive during overview and dismiss on click-away.
+    pub fn is_cloud(&self) -> bool {
+        self.wlr_layer_surface.with_namespace(|ns| ns.starts_with("cce-cloud"))
+    }
+
+    /// Whether a click or touch on it may give it keyboard focus. Not when
+    /// it asked for none: per wlr-layer-shell such a surface is never given
+    /// keyboard focus, and the one that relies on it — an on-screen
+    /// keyboard (cce-keyboard), typing into the window it was clicked over
+    /// — cannot work if a click on its keys takes focus off that window.
+    pub fn takes_click_focus(&self) -> bool {
+        !self.wlr_layer_surface.is_null()
+            && self.wlr_layer_surface.keyboard_interactive()
+                != ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE
     }
 }
 
 unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let layer_surface = crate::container_of!(listener, LayerSurface, destroy);
 
-    log::debug!("layer surface {:?} destroyed", CStr::from_ptr((*(*layer_surface).wlr_layer_surface).namespace));
+    (*layer_surface).wlr_layer_surface.with_namespace(|ns| log::debug!("layer surface {ns:?} destroyed"));
 
     (*layer_surface).animation_timer.remove();
 
@@ -249,14 +349,15 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
     (*layer_surface).commit.disconnect();
     (*layer_surface).new_popup.disconnect();
 
-    (*layer_surface).destroy_popups();
+    (*layer_surface).wlr_layer_surface.destroy_popups();
 
     (*layer_surface).popup_tree.destroy();
 
-    ffi::river_wlr_surface_set_data((*(*layer_surface).wlr_layer_surface).surface, std::ptr::null_mut());
+    ffi::river_wlr_surface_set_data((*layer_surface).wlr_layer_surface.surface(), std::ptr::null_mut());
 
     let server = crate::shared::server_ptr();
     (*crate::reentry::wm(server)).layer_surfaces.0.remove((*layer_surface).ref_key);
+    (*layer_surface).wlr_layer_surface.take();
     let _ = Box::from_raw(layer_surface);
 }
 
@@ -282,10 +383,7 @@ unsafe extern "C" fn handle_animation_tick(data: *mut std::ffi::c_void) -> std::
         false
     };
 
-    ffi::river_scene_node_set_opacity(
-        (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-        (*layer_surface).opacity,
-    );
+    (*layer_surface).tree.set_opacity((*layer_surface).opacity);
 
     if settled {
         (*layer_surface).animation_timer.remove();
@@ -300,25 +398,19 @@ impl LayerSurface {
     /// Begin a dissolve toward `target` (0.0 out, 1.0 in) over `ms`. A `ms`
     /// of 0 snaps, so callers can treat this as "put the surface at
     /// `target`" whether or not fading is configured on.
-    pub unsafe fn start_fade(&mut self, target: f32, ms: u32) {
+    pub fn start_fade(&mut self, target: f32, ms: u32) {
         self.opacity_target = target.clamp(0.0, 1.0);
         self.animation_timer.remove();
         if ms == 0 {
             self.opacity = self.opacity_target;
-            ffi::river_scene_node_set_opacity(
-                (*self.scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-                self.opacity,
-            );
+            self.tree.set_opacity(self.opacity);
             return;
         }
         // Ticks at 16 ms; at least one step so a sub-frame duration still
         // lands rather than dividing by zero.
         let ticks = ((ms as f32) / 16.0).max(1.0);
         self.opacity_step = ((self.opacity_target - self.opacity).abs() / ticks).max(1.0e-4);
-        ffi::river_scene_node_set_opacity(
-            (*self.scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-            self.opacity,
-        );
+        self.tree.set_opacity(self.opacity);
 
         let display = crate::shared::shared().display();
         let timer = if display.is_null() {
@@ -326,17 +418,18 @@ impl LayerSurface {
         } else {
             // The token is the surface's key in `wm.layer_surfaces`.
             let key = self.ref_key;
-            crate::event_source::Timer::on_shared_loop(handle_animation_tick, ((key.generation as usize) << 32) | key.index as usize)
+            // SAFETY: `handle_animation_tick` is an entry point that reads its
+            // data as a store key and looks the surface up by it.
+            unsafe {
+                crate::event_source::Timer::on_shared_loop(handle_animation_tick, ((key.generation as usize) << 32) | key.index as usize)
+            }
         };
         if !timer.is_set() {
             log::error!("Failed to create layer surface animation timer");
             // No timer means no ramp; land on the target rather than leave
             // the surface stranded at whatever it was mid-fade.
             self.opacity = self.opacity_target;
-            ffi::river_scene_node_set_opacity(
-                (*self.scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-                self.opacity,
-            );
+            self.tree.set_opacity(self.opacity);
         } else {
             self.animation_timer = timer;
             self.animation_timer.arm(16);
@@ -345,34 +438,26 @@ impl LayerSurface {
 
     /// PID of the client owning this layer surface, from its wl_resource.
     /// 0 when it cannot be read. Used to resolve a `fade-out` to the caller.
-    pub unsafe fn client_pid(&self) -> i32 {
-        let surface = (*self.wlr_layer_surface).surface;
-        if surface.is_null() {
-            return 0;
-        }
-        let res = ffi::river_wlr_surface_get_resource(surface);
-        if res.is_null() {
-            return 0;
-        }
-        let client = ffi::wl_resource_get_client(res);
-        if client.is_null() {
-            return 0;
-        }
-        let (mut pid, mut uid, mut gid) = (0, 0, 0);
-        ffi::wl_client_get_credentials(client, &mut pid, &mut uid, &mut gid);
-        pid
+    pub fn client_pid(&self) -> i32 {
+        self.wlr_layer_surface.client_pid()
     }
 }
 
-/// `seats` is the window manager's seat store, as a raw place: `f` reaches
-/// the window manager itself.
-unsafe fn update_scheduled_focus_and_dirty_windowing<F>(seats: *const crate::seat::Seats, f: F)
-where F: FnOnce() {
-    let old_focuses: Vec<_> = (*seats).values().map(|seat| seat.layer_shell.scheduled_focus).collect();
+/// Run `f`, then ask for a manage pass if it changed any seat's scheduled
+/// layer focus, else a render pass. `f` is handed the window manager: it
+/// may arrange outputs, which no longer closes surfaces inside the walk
+/// (`close_later`), so nothing it runs reaches the window manager another
+/// way.
+fn update_scheduled_focus_and_dirty_windowing(
+    wm: &mut crate::window_manager::WindowManager,
+    f: impl FnOnce(&mut crate::window_manager::WindowManager),
+) {
+    let old_focuses: Vec<_> = wm.seats.values().map(|seat| seat.layer_shell.scheduled_focus).collect();
 
-    f();
+    f(wm);
 
-    let changed = (*seats)
+    let changed = wm
+        .seats
         .values()
         .zip(&old_focuses)
         .any(|(seat, old)| seat.layer_shell.scheduled_focus != *old);
@@ -385,20 +470,32 @@ where F: FnOnce() {
 }
 
 
+/// Arrange the layer surfaces of the output `wlr_output` is; nothing when
+/// it has no `Output`.
+///
+/// # Safety
+/// `wlr_output` must be null or live.
+unsafe fn arrange_output_of(wlr_output: *mut ffi::wlr_output) {
+    if wlr_output.is_null() {
+        return;
+    }
+    let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
+    if !output.is_null() {
+        (*output).layer_shell.arrange(output);
+    }
+}
+
 unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let layer_surface = crate::container_of!(listener, LayerSurface, map);
-    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
 
-    log::debug!("layer surface {:?} mapped", CStr::from_ptr((*wlr_layer_surface).namespace));
-
-    let server = crate::shared::server_ptr();
+    (*layer_surface).wlr_layer_surface.with_namespace(|ns| log::debug!("layer surface {ns:?} mapped"));
 
     // Overlay layer only: these are the transient surfaces the user opens
     // (the launcher, the notifier), so a dissolve reads as the thing
     // arriving. The Background/Bottom/Top layers are the desktop's own
     // furniture — wallpaper, status bar — and map once at login, where a
     // fade reads as the desktop failing to draw.
-    if (*wlr_layer_surface).current.layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY {
+    if (*layer_surface).wlr_layer_surface.layer() == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY {
         let ms = if cce_core::motion::enabled() { crate::shared::layout().fade_in_ms } else { 0 };
         if ms > 0 {
             (*layer_surface).opacity = 0.0;
@@ -406,116 +503,99 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
         (*layer_surface).start_fade(1.0, ms);
     }
 
-    update_scheduled_focus_and_dirty_windowing(std::ptr::addr_of!((*crate::reentry::wm(server)).seats), || {
-        if (*wlr_layer_surface).current.keyboard_interactive == ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND {
-            for seat in (*crate::reentry::wm(server)).seats.values_mut() {
+    let key = (*layer_surface).ref_key;
+    let on_demand = (*layer_surface).wlr_layer_surface.keyboard_interactive()
+        == ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND;
+    let wlr_output = (*layer_surface).wlr_layer_surface.output();
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    update_scheduled_focus_and_dirty_windowing(wm, |wm| {
+        if on_demand {
+            for seat in wm.seats.values_mut() {
                 if !matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
-                    seat.layer_shell.scheduled_focus = LayerShellSeatFocus::NonExclusive((*layer_surface).ref_key);
+                    seat.layer_shell.scheduled_focus = LayerShellSeatFocus::NonExclusive(key);
                 }
             }
         }
-
-        let wlr_output = (*wlr_layer_surface).output;
-        if !wlr_output.is_null() {
-            let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
-            if !output.is_null() {
-                (*output).layer_shell.arrange(output);
-            }
-        }
-        LayerShell::check_exclusive_focus(&mut (*crate::reentry::wm(server)).seats);
+        arrange_output_of(wlr_output);
+        LayerShell::check_exclusive_focus(&mut wm.seats);
     });
 }
 
 unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let layer_surface = crate::container_of!(listener, LayerSurface, unmap);
-    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
 
-    log::debug!("layer surface {:?} unmapped", CStr::from_ptr((*wlr_layer_surface).namespace));
+    (*layer_surface).wlr_layer_surface.with_namespace(|ns| log::debug!("layer surface {ns:?} unmapped"));
 
     (*layer_surface).animation_timer.remove();
 
-    let server = crate::shared::server_ptr();
-
-    update_scheduled_focus_and_dirty_windowing(std::ptr::addr_of!((*crate::reentry::wm(server)).seats), || {
-        for seat in (*crate::reentry::wm(server)).seats.ptrs() {
-            if let crate::seat::Focus::LayerSurface(surface) = (*seat).focused {
-                if surface == (*wlr_layer_surface).surface {
-                    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-                    crate::seat::Seat::focus_window(wm, (*seat).id, None);
-                    // cce-cloud surfaces skip the focus_next fallback: the bare
-                    // launcher is about to be replaced by whatever it spawned,
-                    // and refocusing the old window first would fight the new
-                    // map. But a PARENTED popup ("cce-cloud:<app-id>", e.g. the
-                    // designer's add-node palette) is chrome OF that app —
-                    // closing it must hand the keyboard straight back to its
-                    // parent, not leave the seat focused on nothing.
-                    let mut is_cce_cloud = false;
-                    let mut cloud_parent: Option<String> = None;
-                    if !(*wlr_layer_surface).namespace.is_null() {
-                        let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                        if ns.starts_with("cce-cloud") {
-                            is_cce_cloud = true;
-                            cloud_parent = ns.strip_prefix("cce-cloud:").map(str::to_string);
-                        }
-                    }
-                    if let Some(parent_app_id) = cloud_parent {
-                        // Status modules parent their submenus too; the bar is
-                        // never a keyboard-focus target, so those keep the old
-                        // leave-it-unfocused behavior.
-                        if !parent_app_id.starts_with("cce-status") {
-                            let parent = wm.windows.values().find(|w| {
-                                !w.closed
-                                    && !w.minimized
-                                    && matches!(w.state, crate::window::WindowState::Mapped)
-                                    && w.get_app_id_string().as_deref() == Some(parent_app_id.as_str())
-                            });
-                            if let Some(id) = parent.map(|w| w.id()) {
-                                // Dismissing chrome, not switching windows:
-                                // the camera stays where the user left it.
-                                (*seat).suppress_focus_pan = true;
-                                crate::seat::Seat::focus_window(wm, (*seat).id, Some(id));
-                                (*seat).suppress_focus_pan = false;
+    let key = (*layer_surface).ref_key;
+    let root = (*layer_surface).wlr_layer_surface.surface();
+    let wlr_output = (*layer_surface).wlr_layer_surface.output();
+    // cce-cloud surfaces skip the focus_next fallback: the bare launcher is
+    // about to be replaced by whatever it spawned, and refocusing the old
+    // window first would fight the new map. But a PARENTED popup
+    // ("cce-cloud:<app-id>", e.g. the designer's add-node palette) is
+    // chrome OF that app — closing it must hand the keyboard straight back
+    // to its parent, not leave the seat focused on nothing.
+    let (is_cce_cloud, cloud_parent) = (*layer_surface).wlr_layer_surface.with_namespace(|ns| {
+        (ns.starts_with("cce-cloud"), ns.strip_prefix("cce-cloud:").map(str::to_string))
+    });
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    update_scheduled_focus_and_dirty_windowing(wm, |wm| {
+        for sid in wm.seats.ids() {
+            if wm.seats.get(sid).is_some_and(|seat| seat.focused == crate::seat::Focus::LayerSurface(root)) {
+                crate::seat::Seat::focus_window(wm, sid, None);
+                if let Some(parent_app_id) = &cloud_parent {
+                    // Status modules parent their submenus too; the bar is
+                    // never a keyboard-focus target, so those keep the old
+                    // leave-it-unfocused behavior.
+                    if !parent_app_id.starts_with("cce-status") {
+                        let parent = wm.windows.values().find(|w| {
+                            !w.closed
+                                && !w.minimized
+                                && matches!(w.state, crate::window::WindowState::Mapped)
+                                && w.get_app_id_string().as_deref() == Some(parent_app_id.as_str())
+                        });
+                        if let Some(id) = parent.map(|w| w.id()) {
+                            // Dismissing chrome, not switching windows: the
+                            // camera stays where the user left it.
+                            if let Some(seat) = wm.seats.get_mut(sid) {
+                                seat.suppress_focus_pan = true;
+                            }
+                            crate::seat::Seat::focus_window(wm, sid, Some(id));
+                            if let Some(seat) = wm.seats.get_mut(sid) {
+                                seat.suppress_focus_pan = false;
                             }
                         }
-                    } else if !is_cce_cloud {
-                        wm.focus_next_visible_window((*seat).id);
                     }
+                } else if !is_cce_cloud {
+                    wm.focus_next_visible_window(sid);
                 }
             }
-            if let LayerShellSeatFocus::NonExclusive(key) = (*seat).layer_shell.scheduled_focus {
-                if key == (*layer_surface).ref_key {
-                    (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::None;
+            if let Some(seat) = wm.seats.get_mut(sid) {
+                if seat.layer_shell.scheduled_focus == LayerShellSeatFocus::NonExclusive(key) {
+                    seat.layer_shell.scheduled_focus = LayerShellSeatFocus::None;
                 }
             }
         }
-
-        let wlr_output = (*wlr_layer_surface).output;
-        if !wlr_output.is_null() {
-            let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
-            if !output.is_null() {
-                (*output).layer_shell.arrange(output);
-            }
-        }
-        LayerShell::check_exclusive_focus(&mut (*crate::reentry::wm(server)).seats);
+        arrange_output_of(wlr_output);
+        LayerShell::check_exclusive_focus(&mut wm.seats);
     });
 }
 
 unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let layer_surface = crate::container_of!(listener, LayerSurface, commit);
-    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
+    let wlr = &(*layer_surface).wlr_layer_surface;
+    let layer = wlr.layer();
 
-    if (*wlr_layer_surface).current.layer != ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND {
-        let mut blur_enabled = crate::shared::layout().window_blur;
-        let mut ignore_transparent = crate::shared::layout().window_backdrop_blur_ignore_transparent;
-        let mut is_status = false;
-        if !(*wlr_layer_surface).namespace.is_null() {
-            let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-            if ns == "cce-status" || ns == "cce-status-interface" {
-                blur_enabled = crate::shared::layout().status_background_blur > 0.001;
-                ignore_transparent = crate::shared::layout().status_backdrop_blur_ignore_transparent;
-                is_status = true;
-            }
-        }
+    if layer != ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND {
+        let layout = crate::shared::layout();
+        let is_status = wlr.with_namespace(|ns| ns == "cce-status" || ns == "cce-status-interface");
+        let (blur_enabled, ignore_transparent) = if is_status {
+            (layout.status_background_blur > 0.001, layout.status_backdrop_blur_ignore_transparent)
+        } else {
+            (layout.window_blur, layout.window_backdrop_blur_ignore_transparent)
+        };
         // Optimized (cached) blur is counterproductive for surfaces stacked ABOVE
         // windows (Top/Overlay): the scene graph re-dirties an optimized-blur node
         // whenever any node below it updates (scenefx wlr_scene.c:744), so window
@@ -524,45 +604,26 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
         // blur is immune to that path and only re-bakes on real damage, so fall back
         // to it here, exactly as status surfaces already do. Bottom/Background layers
         // sit below windows and are unaffected, so they keep the cache.
-        let layer = (*wlr_layer_surface).current.layer;
         let above_windows = layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP
             || layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY;
-        let use_optimized = if is_status || above_windows { false } else { crate::shared::layout().scenefx_optimized_blur };
-        let wlr_surface = (*wlr_layer_surface).surface;
-        let geom_w = if !wlr_surface.is_null() {
-            ffi::river_wlr_surface_get_width(wlr_surface)
+        let use_optimized = if is_status || above_windows { false } else { layout.scenefx_optimized_blur };
+        let wlr_surface = wlr.surface();
+        let (geom_w, geom_h) = if !wlr_surface.is_null() {
+            (ffi::river_wlr_surface_get_width(wlr_surface), ffi::river_wlr_surface_get_height(wlr_surface))
         } else {
-            (*wlr_layer_surface).current.actual_width as i32
+            (wlr.actual_width() as i32, wlr.actual_height() as i32)
         };
-        let geom_h = if !wlr_surface.is_null() {
-            ffi::river_wlr_surface_get_height(wlr_surface)
-        } else {
-            (*wlr_layer_surface).current.actual_height as i32
-        };
-        ffi::river_scene_node_enable_blur(
-            (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-            blur_enabled,
-            use_optimized,
-            ignore_transparent,
-            0,
-            0,
-            geom_w,
-            geom_h,
-            // 0 preserves existing behaviour: layer surfaces (status bar, etc.) never had a
-            // blur radius applied, and their corner rounding is handled separately. Left
-            // deliberately unchanged so this fix stays scoped to toplevels.
-            0,
-        );
+        // A corner radius of 0 preserves existing behaviour: layer surfaces
+        // (status bar, etc.) never had a blur radius applied, and their corner
+        // rounding is handled separately.
+        (*layer_surface).tree.enable_blur(blur_enabled, use_optimized, ignore_transparent, 0, 0, geom_w, geom_h, 0);
     }
 
     if (*layer_surface).opacity < 1.0 {
-        ffi::river_scene_node_set_opacity(
-            (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-            (*layer_surface).opacity,
-        );
+        (*layer_surface).tree.set_opacity((*layer_surface).opacity);
     }
 
-    let wlr_output = (*wlr_layer_surface).output;
+    let wlr_output = wlr.output();
     if wlr_output.is_null() {
         return;
     }
@@ -575,80 +636,52 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
 
     // Position offset for cce-cloud sub-modules
     if !(*layer_surface).parent_offset_applied {
-        if !(*wlr_layer_surface).namespace.is_null() {
-            let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-            if ns.starts_with("cce-cloud:") {
-                let parent_app_id = &ns["cce-cloud:".len()..];
-                let mut parent_x = None;
-                let mut parent_y = None;
-                let mut parent_w = 0;
-
-                for win_ptr in (*crate::reentry::wm(server)).windows.values() {
-                    if win_ptr.closed {
-                        continue;
-                    }
-                    if let Some(win_app_id) = win_ptr.get_app_id_string() {
-                        if win_app_id == parent_app_id {
-                            parent_x = Some(win_ptr.rendering_requested.x);
-                            parent_y = Some(win_ptr.rendering_requested.y);
-                            parent_w = win_ptr.box_geom.width;
-                            break;
-                        }
-                    }
+        let parent_app_id = wlr.with_namespace(|ns| ns.strip_prefix("cce-cloud:").map(str::to_string));
+        if let Some(parent_app_id) = parent_app_id {
+            let wm = &*crate::reentry::wm(server);
+            let parent = wm.windows.values().find(|w| !w.closed && w.get_app_id_string().as_deref() == Some(parent_app_id.as_str()));
+            if let Some(parent) = parent {
+                let (px, py, parent_w) = (parent.rendering_requested.x, parent.rendering_requested.y, parent.box_geom.width);
+                let (mut output_x, mut output_y, mut output_w) = (0, 0, 0);
+                if let Some(output) = wm.outputs.values().find(|o| o.wlr_output().ptr() == wlr_output) {
+                    let wlr_box = output.sent.box_layout();
+                    (output_x, output_y, output_w) = (wlr_box.x, wlr_box.y, wlr_box.width);
                 }
 
-                if let (Some(px), Some(py)) = (parent_x, parent_y) {
-                    let wlr_output = (*wlr_layer_surface).output;
-                    if !wlr_output.is_null() {
-                        let mut output_x = 0;
-                        let mut output_y = 0;
-                        let mut output_w = 0;
-                        for output in (*crate::reentry::wm(server)).outputs.values() {
-                            if output.wlr_output().ptr() == wlr_output {
-                                let wlr_box = output.sent.box_layout();
-                                output_x = wlr_box.x;
-                                output_y = wlr_box.y;
-                                output_w = wlr_box.width;
-                                break;
-                            }
-                        }
+                let relative_parent_x = px - output_x;
+                let relative_parent_y = py - output_y;
+                let is_align_right = (wlr.anchor() & ffi::zwlr_layer_surface_v1_anchor_ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
 
-                        let relative_parent_x = px - output_x;
-                        let relative_parent_y = py - output_y;
-
-                        let anchor = (*wlr_layer_surface).current.anchor;
-                        let is_align_right = (anchor & ffi::zwlr_layer_surface_v1_anchor_ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
-
-                        if is_align_right {
-                            (*wlr_layer_surface).pending.margin.right = (output_w - relative_parent_x - parent_w) + (*wlr_layer_surface).pending.margin.right;
-                            (*wlr_layer_surface).current.margin.right = (*wlr_layer_surface).pending.margin.right;
-                        } else {
-                            (*wlr_layer_surface).pending.margin.left = relative_parent_x + (*wlr_layer_surface).pending.margin.left;
-                            (*wlr_layer_surface).current.margin.left = (*wlr_layer_surface).pending.margin.left;
-                        }
-                        (*wlr_layer_surface).pending.margin.top = relative_parent_y + (*wlr_layer_surface).pending.margin.top;
-                        (*wlr_layer_surface).current.margin.top = (*wlr_layer_surface).pending.margin.top;
-
-                        (*layer_surface).parent_offset_applied = true;
-                    }
+                // Written into wlroots' state directly: the client's margin,
+                // shifted to sit on its parent window.
+                let raw = wlr.ptr();
+                if is_align_right {
+                    (*raw).pending.margin.right = (output_w - relative_parent_x - parent_w) + (*raw).pending.margin.right;
+                    (*raw).current.margin.right = (*raw).pending.margin.right;
+                } else {
+                    (*raw).pending.margin.left = relative_parent_x + (*raw).pending.margin.left;
+                    (*raw).current.margin.left = (*raw).pending.margin.left;
                 }
+                (*raw).pending.margin.top = relative_parent_y + (*raw).pending.margin.top;
+                (*raw).current.margin.top = (*raw).pending.margin.top;
+
+                (*layer_surface).parent_offset_applied = true;
             }
         }
     }
 
     // Check if layer was changed
-    if (*wlr_layer_surface).current.committed & ffi::wlr_layer_surface_v1_state_field_WLR_LAYER_SURFACE_V1_STATE_LAYER != 0 {
-        let tree = crate::shared::scene().layer_surface_tree((*wlr_layer_surface).current.layer);
-        ffi::wlr_scene_node_reparent(
-            (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-            tree,
-        );
+    if wlr.committed() & ffi::wlr_layer_surface_v1_state_field_WLR_LAYER_SURFACE_V1_STATE_LAYER != 0 {
+        if let Some(tree) = crate::shared::scene().layer_tree(layer) {
+            (*layer_surface).tree.reparent(tree);
+        }
     }
 
-    if (*wlr_layer_surface).initial_commit || ((*wlr_layer_surface).current.committed != 0) {
-        update_scheduled_focus_and_dirty_windowing(std::ptr::addr_of!((*crate::reentry::wm(server)).seats), || {
+    if wlr.initial_commit() || wlr.committed() != 0 {
+        let wm = &mut *crate::reentry::wm(server);
+        update_scheduled_focus_and_dirty_windowing(wm, |wm| {
             (*output).layer_shell.arrange(output);
-            LayerShell::check_exclusive_focus(&mut (*crate::reentry::wm(server)).seats);
+            LayerShell::check_exclusive_focus(&mut wm.seats);
         });
     }
 }
@@ -740,61 +773,46 @@ impl LayerShellOutput {
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
         ];
 
+        // The stacking order is copied out first, and a surface found too
+        // large is closed after the walk (`close_later`): closing it here
+        // ran its unmap handler, which arranged the output again from inside
+        // this walk.
         for &layer in &layers {
-            let tree = crate::shared::scene().layer_surface_tree(layer);
-            let children_head = ffi::river_scene_tree_get_children(tree) as *mut WlList;
-            let mut curr = (*children_head).next;
-            while curr != children_head {
-                let next = (*curr).next;
-                let node = ffi::river_scene_node_from_children_link(curr as *mut ffi::wl_list);
-                if let Some(node_data) = SceneNodeData::from_node(node) {
-                    if let SceneNodeDataVal::LayerSurface(layer_surface) = node_data.data {
-                        let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
-                        if !ffi::river_wlr_surface_is_mapped((*wlr_layer_surface).surface) && !(*wlr_layer_surface).initial_commit {
-                            curr = next;
-                            continue;
-                        }
-                        if (*wlr_layer_surface).output != (*output).wlr_output().ptr() {
-                            curr = next;
-                            continue;
-                        }
-                        let current_exclusive = (*wlr_layer_surface).current.exclusive_zone > 0;
-                        if current_exclusive != exclusive {
-                            curr = next;
-                            continue;
-                        }
-
-                        let mut new_area = self.scheduled.non_exclusive_area;
-                        ffi::wlr_scene_layer_surface_v1_configure(
-                            (*layer_surface).scene_layer_surface,
-                            &output_box,
-                            &mut new_area,
-                        );
-
-                        if new_area.width < (output_width / 2) || new_area.height < (output_height / 2) {
-                            ffi::wlr_layer_surface_v1_destroy(wlr_layer_surface);
-                            curr = next;
-                            continue;
-                        }
-                        self.scheduled.non_exclusive_area = new_area;
-
-                        let x = ffi::river_scene_node_get_x((*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node);
-                        let y = ffi::river_scene_node_get_y((*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node);
-                        (*layer_surface).popup_tree.set_position(x, y);
-
-                        let clip = ffi::wlr_box {
-                            x: -(x - (*output).scheduled.x),
-                            y: -(y - (*output).scheduled.y),
-                            width: output_width,
-                            height: output_height,
-                        };
-                        ffi::wlr_scene_subsurface_tree_set_clip(
-                            (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-                            &clip,
-                        );
-                    }
+            for layer_surface in stacked(layer) {
+                // SAFETY: from `stacked`, and nothing below destroys a layer
+                // surface: configuring one only queues an event and moves its
+                // node.
+                let layer_surface = &*layer_surface;
+                let wlr = &layer_surface.wlr_layer_surface;
+                if !wlr.is_mapped() && !wlr.initial_commit() {
+                    continue;
                 }
-                curr = next;
+                if wlr.output() != (*output).wlr_output().ptr() {
+                    continue;
+                }
+                if (wlr.exclusive_zone() > 0) != exclusive {
+                    continue;
+                }
+
+                let mut new_area = self.scheduled.non_exclusive_area;
+                ffi::wlr_scene_layer_surface_v1_configure(layer_surface.scene_layer_surface, &output_box, &mut new_area);
+
+                if new_area.width < (output_width / 2) || new_area.height < (output_height / 2) {
+                    close_later(layer_surface.ref_key);
+                    continue;
+                }
+                self.scheduled.non_exclusive_area = new_area;
+
+                let (x, y) = layer_surface.tree.position().unwrap_or((0, 0));
+                layer_surface.popup_tree.set_position(x, y);
+
+                let clip = ffi::wlr_box {
+                    x: -(x - (*output).scheduled.x),
+                    y: -(y - (*output).scheduled.y),
+                    width: output_width,
+                    height: output_height,
+                };
+                layer_surface.tree.set_subsurface_clip(Some(&clip));
             }
         }
     }

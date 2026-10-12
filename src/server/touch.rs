@@ -407,9 +407,9 @@ impl Cursor {
                         // live, and so is its root; focusing that root is
                         // `Seat::focus`'s contract.
                         unsafe {
-                            if crate::cursor::layer_takes_click_focus(layer_surface) {
+                            if !layer_surface.is_null() && (*layer_surface).takes_click_focus() {
                                 // The layer's root surface, as the click path does.
-                                let root = (*(*layer_surface).wlr_layer_surface).surface;
+                                let root = (*layer_surface).wlr_layer_surface().surface();
                                 crate::seat::Seat::focus(wm, sid, Focus::LayerSurface(root));
                             }
                         }

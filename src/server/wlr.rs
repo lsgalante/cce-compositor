@@ -982,6 +982,104 @@ impl Wlr<ffi::wlr_xwayland> {
     }
 }
 
+/// The layer surface's committed (`current`) state, by value: each reads
+/// zero when unset.
+macro_rules! layer_current {
+    ($($name:ident: $ty:ty = $field:ident;)*) => {$(
+        pub fn $name(&self) -> $ty {
+            // SAFETY: the field holds a live layer surface (`set`'s contract).
+            self.live().map_or(Default::default(), |l| unsafe { (*l).current.$field })
+        }
+    )*};
+}
+
+impl Wlr<ffi::wlr_layer_surface_v1> {
+    layer_current! {
+        layer: u32 = layer;
+        keyboard_interactive: u32 = keyboard_interactive;
+        exclusive_zone: i32 = exclusive_zone;
+        anchor: u32 = anchor;
+        committed: u32 = committed;
+        actual_width: u32 = actual_width;
+        actual_height: u32 = actual_height;
+    }
+
+    /// The layer surface's wl_surface; null when unset.
+    pub fn surface(&self) -> *mut ffi::wlr_surface {
+        self.live().map_or(std::ptr::null_mut(), |l| unsafe { (*l).surface })
+    }
+
+    /// The output it is on (it never moves); null when unset.
+    pub fn output(&self) -> *mut ffi::wlr_output {
+        self.live().map_or(std::ptr::null_mut(), |l| unsafe { (*l).output })
+    }
+
+    /// Whether this commit is the client's first (wlroots' `initial_commit`).
+    pub fn initial_commit(&self) -> bool {
+        self.live().is_some_and(|l| unsafe { (*l).initial_commit })
+    }
+
+    /// Whether its wl_surface is mapped.
+    pub fn is_mapped(&self) -> bool {
+        let surface = self.surface();
+        // SAFETY: a live layer surface's wl_surface is live.
+        !surface.is_null() && unsafe { ffi::river_wlr_surface_is_mapped(surface) }
+    }
+
+    /// `f` handed the namespace, borrowed (copied only when not valid
+    /// UTF-8); empty when unset. A namespace is fixed at creation.
+    pub fn with_namespace<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        let ns = self.live().map_or(std::ptr::null(), |l| unsafe { (*l).namespace });
+        if ns.is_null() {
+            return f("");
+        }
+        // SAFETY: the live layer surface's own string, never replaced.
+        f(&unsafe { CStr::from_ptr(ns) }.to_string_lossy())
+    }
+
+    /// The pid of the client that owns it; 0 when it cannot be read.
+    pub fn client_pid(&self) -> i32 {
+        let surface = self.surface();
+        if surface.is_null() {
+            return 0;
+        }
+        // SAFETY: a live layer surface's wl_surface is live, and so are its
+        // resource and that resource's client.
+        unsafe {
+            let res = ffi::river_wlr_surface_get_resource(surface);
+            if res.is_null() {
+                return 0;
+            }
+            let client = ffi::wl_resource_get_client(res);
+            if client.is_null() {
+                return 0;
+            }
+            let (mut pid, mut uid, mut gid) = (0, 0, 0);
+            ffi::wl_client_get_credentials(client, &mut pid, &mut uid, &mut gid);
+            pid
+        }
+    }
+
+    /// Destroy every xdg popup it has open (each popup's own destroy
+    /// handler then tears its side down).
+    pub fn destroy_popups(&self) {
+        let Some(l) = self.live() else { return };
+        // SAFETY: `popups` is the live layer surface's list of its live
+        // popups; destroying one unlinks only that one, and the next link
+        // is read before the visit.
+        unsafe {
+            let head = &mut (*l).popups as *mut ffi::wl_list as *mut crate::server::WlList;
+            let mut curr = (*head).next;
+            while curr != head {
+                let next = (*curr).next;
+                let popup = crate::container_of!(curr, ffi::wlr_xdg_popup, link);
+                ffi::wlr_xdg_popup_destroy(popup);
+                curr = next;
+            }
+        }
+    }
+}
+
 impl Wlr<ffi::wlr_xdg_toplevel> {
     /// Ask the client to close the toplevel.
     pub fn send_close(&self) {

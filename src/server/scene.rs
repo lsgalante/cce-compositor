@@ -349,13 +349,18 @@ impl Scene {
     }
 
     pub fn layer_surface_tree(&self, layer: u32) -> *mut ffi::wlr_scene_tree {
-        // layer is zwlr_layer_shell_v1_layer enum values
+        self.layer_tree(layer).map_or(std::ptr::null_mut(), |tree| tree.raw())
+    }
+
+    /// The tree a wlr-layer-shell layer (`zwlr_layer_shell_v1_layer`) draws
+    /// its surfaces in.
+    pub fn layer_tree(&self, layer: u32) -> Option<&SceneTree> {
         match layer {
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND => self.layers.background_clients.raw(),
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM => self.layers.bottom.raw(),
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP => self.layers.top.raw(),
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY => self.layers.overlay.raw(),
-            _ => std::ptr::null_mut(),
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND => Some(&self.layers.background_clients),
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM => Some(&self.layers.bottom),
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP => Some(&self.layers.top),
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY => Some(&self.layers.overlay),
+            _ => None,
         }
     }
 }

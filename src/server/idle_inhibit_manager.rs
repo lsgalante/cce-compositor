@@ -65,9 +65,7 @@ impl IdleInhibitManager {
                     },
                     LockSurface(_) => inhibitor_name("lock-surface", None, None),
                     LayerSurface(l) => {
-                        let ns = (*(*l).wlr_layer_surface).namespace;
-                        let ns = (!ns.is_null())
-                            .then(|| std::ffi::CStr::from_ptr(ns).to_string_lossy().into_owned());
+                        let ns = (*l).wlr_layer_surface().with_namespace(|ns| (!ns.is_empty()).then(|| ns.to_string()));
                         inhibitor_name("layer", ns.as_deref(), None)
                     }
                     OverrideRedirect(_) => inhibitor_name("xwayland-override-redirect", None, None),

@@ -52,6 +52,10 @@ path = "src/bin/dnd_source.rs"
 name = "x11-place"
 path = "src/bin/x11_place.rs"
 
+[[bin]]
+name = "layer-bar"
+path = "src/bin/layer_bar.rs"
+
 [dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }

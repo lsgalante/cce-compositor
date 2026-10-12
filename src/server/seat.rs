@@ -522,7 +522,7 @@ impl Seat {
         if this.focus_requested {
             if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) = this.layer_shell.scheduled_focus {
                 if let Some(layer_surface) = wm.layer_surfaces.get(key) {
-                    let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
+                    let wlr_surf = (*layer_surface).wlr_layer_surface().surface();
                     if new_focus != Focus::LayerSurface(wlr_surf) {
                         if let Focus::Window(_) | Focus::OverrideRedirect(_) | Focus::None = new_focus {
                             log::info!("[FocusDebug] Blocking window manager focus request because Exclusive layer surface {:?} is active", key);
@@ -944,14 +944,14 @@ impl Seat {
         match this.layer_shell.sent_focus {
             crate::layer_shell::LayerShellSeatFocus::Exclusive(key) => {
                 if let Some(layer_surface) = wm.layer_surfaces.get(key) {
-                    let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
+                    let wlr_surf = (*layer_surface).wlr_layer_surface().surface();
                     Seat::focus(wm, sid, Focus::LayerSurface(wlr_surf));
                 }
             }
             crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) => {
                 if !this.focus_requested {
                     if let Some(layer_surface) = wm.layer_surfaces.get(key) {
-                        let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
+                        let wlr_surf = (*layer_surface).wlr_layer_surface().surface();
                         Seat::focus(wm, sid, Focus::LayerSurface(wlr_surf));
                     }
                 } else {

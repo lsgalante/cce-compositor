@@ -1439,33 +1439,12 @@ pub(crate) unsafe fn on_motion_absolute(wm: &mut crate::window_manager::WindowMa
     crate::cursor::Cursor::passthrough(wm, sid, (*event).time_msec);
 }
 
-/// True when the layer surface's namespace marks it as cce-cloud chrome —
-/// the launcher and the desktop/app context menus. These are screen-anchored
-/// popups that stay interactive during overview and dismiss on click-away.
+/// `LayerSurface::is_cloud` through a node-data pointer; false for null.
+///
+/// # Safety
+/// `layer_surface` must be null or live (a fresh hit, or a store entry).
 unsafe fn is_cloud_layer(layer_surface: *mut crate::layer_shell::LayerSurface) -> bool {
-    if layer_surface.is_null() {
-        return false;
-    }
-    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
-    if wlr_layer_surface.is_null() || (*wlr_layer_surface).namespace.is_null() {
-        return false;
-    }
-    std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace)
-        .to_string_lossy()
-        .starts_with("cce-cloud")
-}
-
-/// Whether a click or touch on this layer surface may give it keyboard
-/// focus. Not when it asked for none: per wlr-layer-shell such a surface is
-/// never given keyboard focus, and the one that relies on it — an on-screen
-/// keyboard (cce-keyboard), typing into the window it was clicked over —
-/// cannot work if a click on its keys takes focus off that window.
-pub(crate) unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_shell::LayerSurface) -> bool {
-    if layer_surface.is_null() || (*layer_surface).wlr_layer_surface.is_null() {
-        return false;
-    }
-    (*(*layer_surface).wlr_layer_surface).current.keyboard_interactive
-        != ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE
+    !layer_surface.is_null() && (*layer_surface).is_cloud()
 }
 
 /// What every press does before anyone handles it: close the menus it

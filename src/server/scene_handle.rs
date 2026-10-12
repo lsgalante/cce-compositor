@@ -318,6 +318,16 @@ impl<K: Kind> Handle<K> {
         }
     }
 
+    /// The node's position relative to its parent; `None` if it is gone.
+    pub fn position(&self) -> Option<(i32, i32)> {
+        let n = self.node();
+        if n.is_null() {
+            return None;
+        }
+        // SAFETY: a non-null `node()` is a live node.
+        unsafe { Some((ffi::river_scene_node_get_x(n), ffi::river_scene_node_get_y(n))) }
+    }
+
     /// The node's position in layout coordinates and whether it, and every
     /// ancestor, is enabled; `None` if it is gone.
     pub fn coords(&self) -> Option<(i32, i32, bool)> {

@@ -870,12 +870,12 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     // and so is its root wl_surface; focusing it is
                     // `Seat::focus`'s contract (a live layer root).
                     unsafe {
-                        if layer_takes_click_focus(layer_surface) {
+                        if !layer_surface.is_null() && (*layer_surface).takes_click_focus() {
                             // The layer's ROOT surface, not the hit one: a click
                             // on its popup or subsurface would otherwise leave the
                             // seat naming a surface the layer's unmap never clears
                             // (it compares the root), freed with the popup.
-                            let root = (*(*layer_surface).wlr_layer_surface).surface;
+                            let root = (*layer_surface).wlr_layer_surface().surface();
                             crate::seat::Seat::focus(wm, sid, Focus::LayerSurface(root));
                         }
                     }
