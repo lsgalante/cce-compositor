@@ -1375,7 +1375,7 @@ impl Window {
     /// fade. A function of the id, not a `&mut self` method, because it
     /// hands the window manager on (focus, the overview pan, placement)
     /// and those reach this window through the store.
-    pub unsafe fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
+    pub fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
         let this = window_mut!(wm, id, Err("window gone before map"));
         log::debug!("window '{:?}' mapped", this.get_title());
         if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
@@ -1401,21 +1401,22 @@ impl Window {
         let this = window_mut!(wm, id, Err("window gone during placement"));
         let surface = this.root_surface();
         if !surface.is_null() {
-            this.commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_window_commit);
+            // SAFETY: the window stays at its store address until `destroy`,
+            // which disconnects; the live root surface's commit signal
+            // outlives the link, because the surface's unmap disconnects it
+            // first (`Window::unmap`, whatever the state).
+            unsafe { this.commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_window_commit) };
         }
 
-        let app_id_ptr = this.get_app_id();
-        let (is_status_bar, is_wallpaper) = if !app_id_ptr.is_null() {
-            let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
-            (app_id.starts_with("cce-status"), app_id.as_ref() == "cce-wallpaper")
-        } else {
-            (false, false)
-        };
+        let app_id = this.get_app_id_string();
+        let (is_status_bar, is_wallpaper) = app_id
+            .as_deref()
+            .map_or((false, false), |a| (a.starts_with("cce-status"), a == "cce-wallpaper"));
 
         if is_status_bar || is_wallpaper {
             this.tiling_mode = crate::tiling::TilingMode::Status;
             if is_status_bar && this.status_edge == StatusEdge::Unspecified {
-                let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
+                let app_id = app_id.unwrap_or_default();
                 let name = if let Some(stripped) = app_id.strip_prefix("cce-status-interface-left-").or_else(|| app_id.strip_prefix("cce-status-left-")) {
                     stripped
                 } else if let Some(stripped) = app_id.strip_prefix("cce-status-interface-right-").or_else(|| app_id.strip_prefix("cce-status-right-")) {
@@ -1650,6 +1651,9 @@ impl Window {
                 this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
         }
         let this = window_mut!(wm, id);
+        // Whatever the state says: `map`'s SAFETY note relies on the commit
+        // listener always being taken back by the unmap of its surface.
+        this.commit.disconnect();
         if this.state != WindowState::Mapped {
             return;
         }
@@ -1673,7 +1677,6 @@ impl Window {
             }
         }
         let this = window_mut!(wm, id);
-        this.commit.disconnect();
         this.surfaces.save();
         assert!(!matches!(this.impl_type, WindowImpl::Destroying));
         Window::set_closing(wm, id);

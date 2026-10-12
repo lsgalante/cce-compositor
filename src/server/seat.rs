@@ -857,7 +857,7 @@ impl Seat {
         false
     }
 
-    pub unsafe fn manage_finish(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
+    pub fn manage_finish(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
         let this = seat_mut!(wm, sid, ());
 
         if crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked {
@@ -866,16 +866,16 @@ impl Seat {
 
         match this.layer_shell.sent_focus {
             crate::layer_shell::LayerShellSeatFocus::Exclusive(key) => {
-                if let Some(layer_surface) = wm.layer_surfaces.get(key) {
-                    let wlr_surf = (*layer_surface).wlr_layer_surface().surface();
-                    Seat::focus(wm, sid, Focus::LayerSurface(wlr_surf));
+                let root = wm.layer_surfaces.root_surface(key);
+                if !root.is_null() {
+                    Seat::focus(wm, sid, Focus::LayerSurface(root));
                 }
             }
             crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) => {
                 if !this.focus_requested {
-                    if let Some(layer_surface) = wm.layer_surfaces.get(key) {
-                        let wlr_surf = (*layer_surface).wlr_layer_surface().surface();
-                        Seat::focus(wm, sid, Focus::LayerSurface(wlr_surf));
+                    let root = wm.layer_surfaces.root_surface(key);
+                    if !root.is_null() {
+                        Seat::focus(wm, sid, Focus::LayerSurface(root));
                     }
                 } else {
                     this.layer_shell.scheduled_focus = crate::layer_shell::LayerShellSeatFocus::None;

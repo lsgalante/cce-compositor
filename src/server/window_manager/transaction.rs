@@ -75,7 +75,7 @@ impl WindowManager {
         self.border_fade_timer.arm(16);
     }
 
-    pub unsafe fn manage_start(&mut self, sys: &mut crate::ctx::Sys) {
+    pub fn manage_start(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Idle));
         assert!(crate::shared::pending().windowing());
@@ -91,7 +91,10 @@ impl WindowManager {
 
         for id in self.outputs.ids() {
             let Some(output) = self.outputs.ptr(id) else { continue };
-            if (*output).manage_start(self) {
+            // SAFETY: a store entry is live, in its own allocation (the store
+            // holds pointers), and `Output::manage_start` reaches no output
+            // through the window manager it is handed.
+            if unsafe { (*output).manage_start(self) } {
                 drop(self.outputs.remove(id));
                 crate::xwayland_window::note_output_scale(&self.outputs);
             }
@@ -102,11 +105,16 @@ impl WindowManager {
         let stale = crate::shared::sent().take_output_config();
         if !stale.is_null() {
             log::warn!("sent.output_config was not null in manage_start, destroying old configuration");
-            ffi::wlr_output_configuration_v1_send_failed(stale);
-            ffi::wlr_output_configuration_v1_destroy(stale);
+            // SAFETY: `Sent` holds only a live configuration the compositor
+            // owns (`set_output_config`'s contract), and has let go of it.
+            unsafe {
+                ffi::wlr_output_configuration_v1_send_failed(stale);
+                ffi::wlr_output_configuration_v1_destroy(stale);
+            }
         }
-        crate::shared::sent().set_output_config(self.scheduled.output_config);
-        self.scheduled.output_config = std::ptr::null_mut();
+        // SAFETY: the scheduled field holds only a live configuration the
+        // compositor owns (its setter's contract), and has let go of it.
+        unsafe { crate::shared::sent().set_output_config(self.scheduled.take_output_config()) };
 
         for id in self.windows.ids() {
             Window::manage_start(self, id);
@@ -114,10 +122,11 @@ impl WindowManager {
         let mt_windows = mt0.map(|s| s.elapsed().as_micros());
 
         for id in self.seats.ids() {
-            let Some(seat) = self.seats.ptr(id) else { continue };
-            if (*seat).manage_start() {
+            if self.seats.get_mut(id).is_some_and(|seat| seat.manage_start()) {
                 if let Some(seat) = self.seats.take(id) {
-                    crate::seat::Seat::destroy(seat);
+                    // SAFETY: the box was just taken out of the store, and
+                    // came from `Seat::create`.
+                    unsafe { crate::seat::Seat::destroy(seat) };
                 }
             }
         }
@@ -164,7 +173,7 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn manage_finish(&mut self, sys: &mut crate::ctx::Sys) {
+    pub fn manage_finish(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Manage));
         self.cancel_timeout_timer();
@@ -172,8 +181,9 @@ impl WindowManager {
         log::debug!("manage sequence finish");
 
         for id in crate::shared::sent().seats.ids() {
-            let Some(seat) = self.seats.ptr(id) else { continue };
-            crate::seat::Seat::manage_finish(self, (*seat).id);
+            if self.seats.get(id).is_some() {
+                crate::seat::Seat::manage_finish(self, id);
+            }
         }
 
         self.state = WindowManagerState::InflightConfigures(0);

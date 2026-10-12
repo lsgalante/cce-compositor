@@ -228,6 +228,13 @@ impl LayerSurfaces {
     pub fn iter(&self) -> impl Iterator<Item = *mut LayerSurface> + '_ {
         self.0.iter().copied()
     }
+
+    /// The root wl_surface of the layer surface `key` names; null when it
+    /// is gone.
+    pub fn root_surface(&self, key: Key) -> *mut ffi::wlr_surface {
+        // SAFETY: an entry is live (see the type).
+        self.get(key).map_or(std::ptr::null_mut(), |l| unsafe { (*l).wlr_layer_surface.surface() })
+    }
 }
 
 pub struct LayerSurface {

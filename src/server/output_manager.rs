@@ -637,11 +637,12 @@ unsafe extern "C" fn handle_manager_apply(listener: *mut ffi::wl_listener, data:
     }
 
     let wm = &mut *crate::reentry::wm(server);
-    if !wm.scheduled.output_config.is_null() {
-        ffi::wlr_output_configuration_v1_send_failed(wm.scheduled.output_config);
-        ffi::wlr_output_configuration_v1_destroy(wm.scheduled.output_config);
+    let older = wm.scheduled.take_output_config();
+    if !older.is_null() {
+        ffi::wlr_output_configuration_v1_send_failed(older);
+        ffi::wlr_output_configuration_v1_destroy(older);
     }
-    wm.scheduled.output_config = config;
+    wm.scheduled.set_output_config(config);
 
     crate::shared::pending().dirty_windowing();
 }

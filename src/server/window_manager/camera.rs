@@ -163,17 +163,16 @@ impl WindowManager {
     /// pass runs synchronously, as the dirty-idle callback would run it, so
     /// this frame draws the result; with a pass already in flight the dirty
     /// flag queues it, as before.
-    pub unsafe fn step_op_frame(&mut self, sys: &mut crate::ctx::Sys) {
+    pub fn step_op_frame(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         if !self.op_frame_pending {
             return;
         }
         self.op_frame_pending = false;
-        for seat in self.seats.ptrs() {
-            if let Some(ref op) = (*seat).op {
-                if let Some(id) = op.window.filter(|&id| self.windows.get(id).map_or(false, |w| !w.closed)) {
-                    Window::manage_finish(self, id);
-                }
+        let grabbed: Vec<crate::window::WindowId> = self.seats.values().filter_map(|seat| seat.op.as_ref()?.window).collect();
+        for id in grabbed {
+            if self.windows.get(id).map_or(false, |w| !w.closed) {
+                Window::manage_finish(self, id);
             }
         }
         if matches!(self.state, WindowManagerState::Idle) {

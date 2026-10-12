@@ -51,7 +51,27 @@ impl PatchReason {
 }
 
 pub struct WindowManagerScheduled {
-    pub output_config: *mut ffi::wlr_output_configuration_v1,
+    /// A configuration a client applied, waiting for the next manage pass;
+    /// null for none. Private: whoever takes it answers and destroys it, so
+    /// it must be a live configuration the compositor owns
+    /// (`set_output_config`).
+    output_config: *mut ffi::wlr_output_configuration_v1,
+}
+
+impl WindowManagerScheduled {
+    /// Take the waiting configuration, leaving none.
+    pub fn take_output_config(&mut self) -> *mut ffi::wlr_output_configuration_v1 {
+        std::mem::replace(&mut self.output_config, std::ptr::null_mut())
+    }
+
+    /// Hold `config` for the next manage pass.
+    ///
+    /// # Safety
+    /// `config` is null or a live configuration the compositor owns, and
+    /// any older one has been taken (else it would never be answered).
+    pub unsafe fn set_output_config(&mut self, config: *mut ffi::wlr_output_configuration_v1) {
+        self.output_config = config;
+    }
 }
 
 pub struct WindowManagerRenderingRequested {
