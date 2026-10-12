@@ -102,6 +102,8 @@
 #include <wlr/backend/libinput.h>
 
 // Custom FFI helpers defined in wlroots_log_wrapper.c
+// dmabuf_check.c: refuse client DMA-BUFs the renderer's GPU cannot use.
+bool cce_dmabuf_check_install(struct wlr_linux_dmabuf_v1 *linux_dmabuf, int renderer_fd);
 struct wlr_surface *river_scene_node_get_surface(struct wlr_scene_node *node);
 enum wlr_scene_node_type river_scene_node_get_type(struct wlr_scene_node *node);
 struct wlr_scene_tree *river_scene_node_get_parent(struct wlr_scene_node *node);

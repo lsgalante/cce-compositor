@@ -1069,6 +1069,30 @@ children, and re-enabling the output crashed in `draw_grid`'s
 - Output: `output.rs`, `output_manager.rs`. Session: `lock_manager.rs`,
   `idle_inhibit_manager.rs`. Rendering: `scene.rs`, `scene_node_data.rs`.
 
+### Client DMA-BUFs are probed before import (`dmabuf_check.c`)
+
+A client can hand over a DMA-BUF the renderer's GPU imports but cannot use:
+another GPU's video memory. GE-Proton's winewayland forwards dmabufs DXVK
+rendered on the NVIDIA GPU, the PRIME import succeeds, and the first draw
+sampling it gets ENOMEM from i915's execbuf, which Mesa's iris answers with
+`abort()` ("intel: the execbuf ioctl keeps returning ENOMEM") — the session
+died ~30 s after launching Ubisoft Connect that way (2026-10-12). So
+`cce_dmabuf_check_install` (called right after the linux-dmabuf global is
+created) replaces wlroots' import check: it still PRIME-imports every
+plane, on its OWN open of the render node (a dup would share Mesa's GEM
+handle namespace, and closing a probe handle would close the renderer's),
+and on i915 a buffer whose `/proc/self/fdinfo` `exp_name` is not `i915`
+(NVIDIA's reads `drm`) is referenced by a do-nothing batch
+(`MI_BATCH_BUFFER_END`, written through a WC mmap: gen12 has no
+GEM_PWRITE). The kernel pins its pages as the renderer's draw would, and a
+failure is an errno: the import fails, the client gets
+`importing the supplied dmabufs failed` (create_immed is a protocol error,
+so it is disconnected), and `dmabuf check: refused ...` is logged. Intel's
+own buffers skip the probe. On a non-i915 renderer only the import check
+runs. Repro: `UBISOFT_WAYLAND_FORCE=1 ~/.local/bin/ubisoft-connect-wayland`
+spawned into an `--xwayland --scale 2` shadow with the real `HOME`;
+NVIDIA `vkcube --wsi wayland` is the negative control (its buffers pass).
+
 ### A node must draw everything it claims as opaque
 
 `scene_node_opaque_region` (scenefx `wlr_scene.c`) is a promise: whatever a

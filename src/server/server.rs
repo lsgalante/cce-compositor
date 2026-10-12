@@ -816,6 +816,15 @@ impl Server {
             // Setup linux dmabuf if supported
             if !ffi::wlr_renderer_get_texture_formats(renderer, ffi::wlr_buffer_cap_WLR_BUFFER_CAP_DMABUF).is_null() {
                 self.linux_dmabuf = ffi::wlr_linux_dmabuf_v1_create_with_renderer(wl_server, 5, renderer);
+                // A client buffer the renderer's GPU can import but not use
+                // (another GPU's video memory) made Mesa abort the whole
+                // compositor on its first draw; `dmabuf_check.c` probes such
+                // buffers and fails their import instead.
+                if !self.linux_dmabuf.is_null()
+                    && !ffi::cce_dmabuf_check_install(self.linux_dmabuf, ffi::wlr_renderer_get_drm_fd(renderer))
+                {
+                    log::warn!("dmabuf check not installed: wlroots' import check only");
+                }
             }
 
             // Setup linux drm syncobj (explicit sync) if supported — opt-in
