@@ -378,7 +378,7 @@ unsafe extern "C" fn handle_new_text_input(listener: *mut ffi::wl_listener, data
     let _im = crate::container_of!(listener, InputManager, new_text_input);
     let wlr_text_input = data as *mut ffi::wlr_text_input_v3;
 
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     if let Err(e) = crate::text_input::TextInput::create(wm, wlr_text_input) {
         log::error!("failed to create text input: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_text_input).resource);
@@ -388,13 +388,9 @@ unsafe extern "C" fn handle_new_text_input(listener: *mut ffi::wl_listener, data
 unsafe extern "C" fn handle_new_input_method(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let im = &mut *crate::container_of!(listener, InputManager, new_input_method);
     let input_method = data as *mut ffi::wlr_input_method_v2;
-    let seat = ffi::river_wlr_seat_get_data((*input_method).seat) as *mut Seat;
-    if !seat.is_null() {
-        crate::input_relay::InputRelay::new_input_method(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*seat).id, input_method);
-    } else {
-        // Fallback to default seat if input_method.seat has no data set yet
-        crate::input_relay::InputRelay::new_input_method(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*im.default_seat).id, input_method);
-    }
+    // Fallback to default seat if input_method.seat has no data set yet
+    let Some(sid) = Seat::id_of((*input_method).seat).or_else(|| im.default_seat.as_ref().map(|s| s.id)) else { return };
+    crate::input_relay::InputRelay::new_input_method(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, input_method);
 }
 
 unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

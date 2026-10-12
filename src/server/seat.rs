@@ -169,6 +169,22 @@ pub struct Seat {
 }
 
 impl Seat {
+    /// The id of the seat a `wlr_seat` belongs to, from the user data
+    /// `Seat::create` gave it; `None` for a null `wlr_seat` or one without
+    /// a seat. For wlroots callbacks that are handed a `wlr_seat`: look
+    /// the seat up in `wm.seats` with the id rather than keeping the
+    /// pointer.
+    ///
+    /// # Safety
+    /// `wlr_seat` is null or live, and its data null or a live `Seat`.
+    pub unsafe fn id_of(wlr_seat: *mut ffi::wlr_seat) -> Option<SeatId> {
+        if wlr_seat.is_null() {
+            return None;
+        }
+        let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut Seat;
+        (!seat.is_null()).then(|| (*seat).id)
+    }
+
     pub unsafe fn create(server: *mut Server, seats: &mut Seats, name: &str) -> Result<*mut Self, &'static str> {
         let name_c = std::ffi::CString::new(name).unwrap();
         let wlr_seat = ffi::wlr_seat_create((*server).wl_server, name_c.as_ptr());
