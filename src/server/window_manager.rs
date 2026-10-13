@@ -2129,6 +2129,27 @@ impl WindowManager {
         self.rendering_requested.list.push(id);
     }
 
+    /// Put restored window `id` where its saved stack position says
+    /// (`Window::restore_stack`), among the restored windows already in the
+    /// render list (`policy::state::restored_stack_slot`), moving it if it
+    /// is there. A window with no saved position goes on top, as
+    /// `render_list_raise` puts it.
+    pub fn render_list_place_restored(&mut self, id: crate::window::WindowId) {
+        let Some(rank) = self.windows.get(id).and_then(|w| w.restore_stack) else {
+            self.render_list_raise(id);
+            return;
+        };
+        self.render_list_remove(id);
+        let ranks: Vec<Option<u32>> = self
+            .rendering_requested
+            .list
+            .iter()
+            .map(|&w| self.windows.get(w).and_then(|w| w.restore_stack))
+            .collect();
+        let at = crate::policy::state::restored_stack_slot(&ranks, rank);
+        self.rendering_requested.list.insert(at, id);
+    }
+
     /// Put `id` at the bottom of the render list, moving it if it is there.
     pub fn render_list_lower(&mut self, id: crate::window::WindowId) {
         self.render_list_remove(id);
@@ -2154,6 +2175,12 @@ impl WindowManager {
         let mapped = matches!(window.state, crate::window::WindowState::Mapped);
         if self.in_render_list(id) || mapped {
             self.render_list_raise(id);
+        }
+        // Raised on purpose: its saved place no longer applies, and the
+        // restored windows still to come slot around it rather than over
+        // it (`render_list_place_restored`).
+        if let Some(window) = self.windows.get_mut(id) {
+            window.restore_stack = None;
         }
         self.keep_status_bar_on_top();
         // Restacking changes who covers the adjust target.
@@ -3189,6 +3216,7 @@ mod tests {
             focused: false,
             argv: None,
             fullscreen_at: None,
+            stack: None,
         });
 
         {
@@ -3232,6 +3260,7 @@ mod tests {
             focused: false,
             argv: None,
             fullscreen_at: None,
+            stack: None,
         }
     }
 

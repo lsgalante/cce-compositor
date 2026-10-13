@@ -578,6 +578,13 @@ pub struct Window {
     /// fresh spawn for `center_on_spawn`.
     pub session_restored: bool,
     pub restored_focused: bool,
+    /// The stack position this window's SESSION entry saved
+    /// (`SavedWindowState::stack`): where `render_list_place_restored` slots
+    /// it among the restored windows already up, so a login rebuilds the
+    /// stacking order whatever order the apps map in. Dropped by
+    /// `raise_window` — once the user has raised a window, that outranks
+    /// the file — and `None` for a window not restored from the session.
+    pub restore_stack: Option<u32>,
     pub closed: bool,
     /// Set when the compositor asks this window to close, so `unmap` can tell
     /// a departure someone requested from a client that simply vanished.
@@ -978,6 +985,7 @@ impl Window {
             satellite: false,
             session_restored: false,
             restored_focused: false,
+            restore_stack: None,
             closed: false,
             close_requested: false,
             has_parent: false,
@@ -1979,10 +1987,12 @@ impl Window {
                     // The end is the top of the stack. A shy helper window
                     // (`is_shy`) goes in at the bottom instead — beneath the
                     // app's own windows, where its app keeps it.
+                    // A restored window takes its saved place instead
+                    // (`render_list_place_restored`; on top without one).
                     if this.is_shy() {
                         wm.render_list_lower(id);
                     } else {
-                        wm.render_list_raise(id);
+                        wm.render_list_place_restored(id);
                     }
 
                     let this = window_mut!(wm, id);

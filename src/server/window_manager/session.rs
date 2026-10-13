@@ -201,6 +201,9 @@ impl WindowManager {
             return;
         };
         let focused_win = self.focused_window();
+        // The stacking order, bottom first: each entry records its place in
+        // it (`SavedWindowState::stack`) so the next login can rebuild it.
+        let stack_order = self.render_list_ids();
         let mut saved_wins = Vec::new();
         let mut last_states = self.last_window_states.clone();
         // (app_id, title, program) of each live shy window, whose own
@@ -326,6 +329,7 @@ impl WindowManager {
                 } else {
                     w.last_fullscreen_at.or(w.restore_fullscreen_at)
                 },
+                stack: stack_order.iter().position(|&s| s == w.id()).map(|p| p as u32),
             };
 
             saved_wins.push(win_state.clone());
@@ -342,6 +346,9 @@ impl WindowManager {
             // the Ubisoft Connect it launches from took turns evicting each
             // other, and the game's entry was gone by the time it was next
             // launched — Connect is still up after the game closes.
+            // A stack position is session state: a window reopened later
+            // from this entry comes up on top, so the entry keeps none.
+            let win_state = SavedWindowState { stack: None, ..win_state };
             if let Some(pos) = last_states.iter().position(|s| last_state_slot(s, &app_id, args.first().map(String::as_str))) {
                 last_states[pos] = win_state;
             } else {

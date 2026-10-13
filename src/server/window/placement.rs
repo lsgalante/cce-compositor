@@ -325,6 +325,15 @@ impl Window {
             // (whether the app happened to be focused when last closed) and
             // must not feed the settle-phase focus gates.
             this.restored_focused = from_session && saved.focused;
+            // Its place in the stacking order, likewise session-only: a
+            // window reopened later comes up on top like any new one. One
+            // already in the render list (linked before its title or map
+            // brought the restore) moves there now; one not yet linked is
+            // placed when it is (`manage_start`).
+            this.restore_stack = if from_session { saved.stack } else { None };
+            if this.restore_stack.is_some() && wm.in_render_list(id) {
+                wm.render_list_place_restored(id);
+            }
         }
     }
 

@@ -1858,8 +1858,20 @@ tiled window rises only among the tiled windows. The keyboard
 a tiled window steps one cell and covers whatever is there, where it used
 to swap origins with the tiled window holding the destination. The policy
 crate's `overview` module and `spawn::nearest_free`, which only these moves
-used, are deleted. Stacking order is not saved, so a session restore
-re-stacks in map order. In a shadow: two `set-mode tiled` windows, an
+used, are deleted. **The stacking order survives a login** (since
+2026-10-13): `save_state` records each session entry's render-list
+position (`SavedWindowState::stack`), `try_restore` hands a session entry's
+to the window (`restore_stack`; never from a `last_window_states` borrow,
+whose entries carry none), and `render_list_place_restored` slots it among
+the restored windows already up (`policy::state::restored_stack_slot`) —
+at link time in `manage_start`, or at once when the restore comes after
+the link. Apps map in whatever order they start, so the slot is relative:
+directly above the restored window saved just beneath it. `raise_window`
+drops the position, so a window the user raises mid-login stays over the
+late arrivals. Until then a restore stacked in map order, the last app up
+on top, even over the focused window. Verified in a shadow by saving C, A,
+B bottom-up and restarting with `cce-shadow start --restore`: the apps map
+A, B, C and come back C, A, B. In a shadow: two `set-mode tiled` windows, an
 overview drag of one onto the other (`pointer-press` / `pointer-move-to` /
 `pointer-release`), then `ctl windows` shows both on the same cells and
 the focused one with the higher `stack=`.
