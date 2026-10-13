@@ -1856,9 +1856,9 @@ window above every Tiled one, whatever the render-list order, so a raised
 tiled window rises only among the tiled windows. The keyboard
 `move_window_*` step stacks too (`cce-window-manager` `actions::move_window`):
 a tiled window steps one cell and covers whatever is there, where it used
-to swap origins with the tiled window holding the destination. Left behind
-in the policy crate, no longer called at all: `overview::displace` and
-`spawn::nearest_free`. Stacking order is not saved, so a session restore
+to swap origins with the tiled window holding the destination. The policy
+crate's `overview` module and `spawn::nearest_free`, which only these moves
+used, are deleted. Stacking order is not saved, so a session restore
 re-stacks in map order. In a shadow: two `set-mode tiled` windows, an
 overview drag of one onto the other (`pointer-press` / `pointer-move-to` /
 `pointer-release`), then `ctl windows` shows both on the same cells and
