@@ -283,7 +283,7 @@ dependencies = [
 [[package]]
 name = "cce-core"
 version = "0.1.0"
-source = "git+https://github.com/lsgalante/cce-core.git?rev=5b8dcb30f1b0d7d607ab49d637069560eca0cb14#5b8dcb30f1b0d7d607ab49d637069560eca0cb14"
+source = "git+https://github.com/lsgalante/cce-core.git?rev=388473078207ff41208e8648c04499e94632f20a#388473078207ff41208e8648c04499e94632f20a"
 dependencies = [
  "kdl",
  "libc",
@@ -293,12 +293,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cce-core"
+version = "0.1.0"
+source = "git+https://github.com/lsgalante/cce-core.git?rev=5b8dcb30f1b0d7d607ab49d637069560eca0cb14#5b8dcb30f1b0d7d607ab49d637069560eca0cb14"
+dependencies = [
+ "libc",
+ "log",
+ "web-time",
+]
+
+[[package]]
 name = "cce-fx"
 version = "0.1.0"
 dependencies = [
  "bindgen",
  "cc",
- "cce-core",
+ "cce-core 0.1.0 (git+https://github.com/lsgalante/cce-core.git?rev=388473078207ff41208e8648c04499e94632f20a)",
  "cce-window-manager",
  "clap",
  "env_logger",
@@ -320,7 +330,7 @@ name = "cce-window-manager"
 version = "0.1.0"
 source = "git+https://github.com/lsgalante/cce-window-manager.git?rev=ec2bae2c0edd4629f73842f60a83a1dc4e947b49#ec2bae2c0edd4629f73842f60a83a1dc4e947b49"
 dependencies = [
- "cce-core",
+ "cce-core 0.1.0 (git+https://github.com/lsgalante/cce-core.git?rev=5b8dcb30f1b0d7d607ab49d637069560eca0cb14)",
  "log",
  "serde",
 ]
