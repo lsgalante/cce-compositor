@@ -258,7 +258,7 @@ framework. Understanding it is the prerequisite for touching any client.
 - **The `Application` trait** (`cce-ui/src/backend/app.rs`, re-exported from
   `cce_ui::engine`) is the contract every client implements. Key methods:
   `create(sender)`, `settings`, `update(msg)`, `tick(dt)`,
-  `display_list` (the single paint path) plus `overlay_quads` / `custom_vertices`,
+  `display_list` (the single paint path) plus the legacy `overlay_quads`,
   and the input hooks (`handle_pointer_move`, `handle_mouse_input`, …). Apps needing
   direct renderer access (3D scenes, app-shaped text, non-rect window chrome) use the
   hook `renderer_init` and the extension traits `App3D` (`stage_renderer`) and `Csd`
