@@ -2217,11 +2217,13 @@ impl Window {
                     // they always overhang the cell block the restore just
                     // gave it. Adopting that wish made it `box_geom` (see
                     // `render_finish`), the next Tiled arrange covered every
-                    // cell the overhang touched (`snap::tiled_span` floors the
-                    // low edge and CEILS the high one), the grown size was
-                    // saved, and Chrome came back a whole cell wider and
-                    // taller on every login — a one-way ratchet, since each
-                    // session's insets sit on top of the last session's block.
+                    // cell the overhang touched (`snap::tiled_span` ceiled the
+                    // high edge until 2026-10-13; it now rounds to the nearest
+                    // cell edge, so only an overhang past half a cell grows
+                    // the block), the grown size was saved, and Chrome came
+                    // back a whole cell wider and taller on every login — a
+                    // one-way ratchet, since each session's insets sit on top
+                    // of the last session's block.
                     // A window with no restored size still seeds its block
                     // from the client's first wish, which is where a freshly
                     // launched app's size comes from.
