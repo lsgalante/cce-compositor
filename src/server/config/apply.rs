@@ -78,6 +78,10 @@ pub fn parse_config(
             .and_then(|w| w.swipe_repeat_peek)
             .filter(|v| v.is_finite() && *v >= 0.0)
             .unwrap_or(next_layout.swipe_peek_px * 0.5);
+        next_layout.swipe_near_peek_px = tv
+            .and_then(|w| w.swipe_near_peek)
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .unwrap_or(next_layout.swipe_peek_px * 0.25);
         next_layout.swipe_focus_cone_deg = tv
             .and_then(|w| w.swipe_focus_cone)
             .filter(|v| v.is_finite())

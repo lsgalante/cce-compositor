@@ -897,13 +897,14 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let touchpad_view_sensitivity = get_child_arg_f64_opt(node, "touchpad_view_sensitivity");
         let swipe_peek = get_child_arg_f64_opt(node, "swipe_peek");
         let swipe_repeat_peek = get_child_arg_f64_opt(node, "swipe_repeat_peek");
+        let swipe_near_peek = get_child_arg_f64_opt(node, "swipe_near_peek");
         let swipe_focus_cone = get_child_arg_f64_opt(node, "swipe_focus_cone");
         let swipe_threshold = get_child_arg_f64_opt(node, "swipe_threshold");
         let swipe_repeat_threshold = get_child_arg_f64_opt(node, "swipe_repeat_threshold");
         let touchpad_view_invert = get_child_arg_bool_opt(node, "touchpad_view_invert");
         let touchpad_hscroll_shift_apps = get_child_args_string_vec_opt(node, "touchpad_hscroll_shift_apps");
         let osk_on_touch = get_child_arg_bool_opt(node, "osk_on_touch");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi, xwayland_hidpi_except, allow_tearing, touchpad_view_apps, touchpad_view_swipe, touchpad_view_sensitivity, swipe_peek, swipe_repeat_peek, swipe_focus_cone, swipe_threshold, swipe_repeat_threshold, touchpad_view_invert, touchpad_hscroll_shift_apps, osk_on_touch });
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi, xwayland_hidpi_except, allow_tearing, touchpad_view_apps, touchpad_view_swipe, touchpad_view_sensitivity, swipe_peek, swipe_repeat_peek, swipe_near_peek, swipe_focus_cone, swipe_threshold, swipe_repeat_threshold, touchpad_view_invert, touchpad_hscroll_shift_apps, osk_on_touch });
     }
 
     Ok(Config {

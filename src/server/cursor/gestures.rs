@@ -6,7 +6,7 @@ use super::*;
 // The gesture arithmetic and what an action means for navigation are the
 // policy crate's (`cce_window_manager::gesture`); re-exported under the names
 // the handlers here use.
-pub(crate) use crate::policy::gesture::{action_navigates, is_directional_focus, swipe_lean};
+pub(crate) use crate::policy::gesture::{action_navigates, is_directional_focus, settle_peek, step_peek_px, swipe_lean};
 
 /// The sense a swipe along `finger_dir` gives its axis when aiming focus,
 /// from the first bind that matches it (first match wins, as in the fire
@@ -28,6 +28,47 @@ pub(crate) fn swipe_focus_vector(binds: &[crate::config::GestureBind], fingers: 
     let sy = if dy != 0.0 { focus_axis_sense(binds, fingers, mods, if dy < 0.0 { "up" } else { "down" }) } else { None };
     let v = (sx.map_or(0.0, |s| s * dx), sy.map_or(0.0, |s| s * dy));
     (v != (0.0, 0.0)).then_some(v)
+}
+
+/// The pan (screen px) the focus step `action` would make if the swipe's
+/// travel so far fired it, or `None` when it would focus nothing. Taken
+/// from the camera as it stands with the lean taken back out: that is
+/// what the fire pans from, since it stops any ease still running (after a
+/// step, that step's own) before it focuses. The target window is cached
+/// per heading (`Cursor::swipe_step_target`), since asking the policy
+/// builds a snapshot of every window; the pan to it is cheap, and is taken
+/// every event because the camera under the lean may be easing.
+fn swipe_step_pan(
+    wm: &mut crate::window_manager::WindowManager,
+    sid: crate::seat::SeatId,
+    action: crate::config::Action,
+    fingers: u32,
+    mods: u32,
+) -> Option<(f64, f64)> {
+    let focused = wm.focused_window();
+    let cursor = cursor_mut!(wm, sid, None);
+    let v = swipe_focus_vector(&crate::shared::layout().gesture_binds, fingers, mods, (cursor.gesture_dx, cursor.gesture_dy));
+    // In 64ths of a turn, wrapped so straight left is one bucket whichever
+    // side of the axis the vertical drift falls.
+    let bucket = v.map_or(-1, |(x, y)| ((y.atan2(x) / (std::f64::consts::TAU / 64.0)).round() as i32).rem_euclid(64));
+    let heading = (action, bucket, focused);
+    let target = match cursor.swipe_step_target {
+        Some((key, target)) if key == heading => target,
+        _ => {
+            let target = wm.focus_step_target(v, &action);
+            let cursor = cursor_mut!(wm, sid, None);
+            cursor.swipe_step_target = Some((heading, target));
+            target
+        }
+    }?;
+    let cursor = cursor_mut!(wm, sid, None);
+    let lean = cursor.swipe_peek;
+    let origin = crate::policy::camera::Camera {
+        pan_x: wm.desk_pan_x + wm.pan_pending[0] - lean[0],
+        pan_y: wm.desk_pan_y + wm.pan_pending[1] - lean[1],
+        zoom: wm.desk_zoom,
+    };
+    Some(wm.focus_step_pan(target, origin))
 }
 
 pub(crate) unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -66,6 +107,8 @@ pub(crate) fn on_swipe_begin(wm: &mut crate::window_manager::WindowManager, sid:
     cursor.swipe_spent = false;
     cursor.swipe_dead_end = None;
     cursor.swipe_peek = [0.0, 0.0];
+    cursor.swipe_step_target = None;
+    cursor.swipe_lean_px = None;
 
     log::info!("handle_swipe_begin: fingers={}", event.fingers);
 
@@ -144,6 +187,9 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
     // Which directions this finger count + chord could still fire a
     // navigating bind in — the directions the camera may peek toward.
     let mut navigates = [false; 4]; // left, right, up, down
+    // The bind each direction fires (the first that matches), which says
+    // what the lean that way previews.
+    let mut heading = [crate::config::Action::None; 4];
 
     for gb in &crate::shared::layout().gesture_binds {
         if gb.gesture_type == "swipe" && gb.fingers == event.fingers && gb.mods == modifiers {
@@ -164,6 +210,9 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
             if let Some(i) = slot {
                 if !navigates[i] && action_navigates(gb.action) {
                     navigates[i] = true;
+                }
+                if heading[i] == crate::config::Action::None {
+                    heading[i] = gb.action;
                 }
             }
         }
@@ -225,6 +274,8 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
         // it, and whatever it asks for is applied from here. The one rule
         // is that the camera never reverses at the fire — see below.
         let lean = std::mem::replace(&mut cursor.swipe_peek, [0.0, 0.0]);
+        cursor.swipe_step_target = None;
+        cursor.swipe_lean_px = None;
         if lean != [0.0, 0.0] {
             wm.desk_pan_x += wm.pan_pending[0];
             wm.desk_pan_y += wm.pan_pending[1];
@@ -307,15 +358,42 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
         // ease is instant then, `advance_camera_animation`). A lean
         // already showing when they were turned off goes back the same way.
         let cursor = cursor_mut!(wm, sid, ());
-        let peek_px = if !cce_core::motion::enabled() {
+        let full_px = if !cce_core::motion::enabled() {
             0.0
         } else if cursor.gesture_triggered {
             crate::shared::layout().swipe_repeat_peek_px
         } else {
             crate::shared::layout().swipe_peek_px
         };
-        let cursor = cursor_mut!(wm, sid, ());
+        let mut peek_px = full_px;
         let (dx, dy) = (cursor.gesture_dx, cursor.gesture_dy);
+        // Toward a focus step, the lean leaves the camera no more than
+        // `swipe_near_peek` from where the step will put it
+        // (`step_peek_px`). A step to a window already in view pans
+        // nothing, so the camera stops where the lean left it: the full
+        // peek there was drift, the desk swaying by it on every switch
+        // between two windows on screen. Such a window gets the small
+        // lean, which still answers the fingers; one a full peek or more
+        // away gets the full lean, as before. Toward a pan bind, or a
+        // focus with nowhere to go (the wall above, for the rest of the
+        // swipe), the lean is whole. The size moves no faster than the
+        // fingers (`settle_peek`), so the aim crossing from a window in
+        // view to one far off grows the lean rather than jumping it.
+        let shape = swipe_lean(dx, dy, navigates, threshold, 1.0, 1.0);
+        if full_px > 0.0 && shape != [0.0, 0.0] {
+            let toward = heading[if dx.abs() >= dy.abs() { if dx < 0.0 { 0 } else { 1 } } else if dy < 0.0 { 2 } else { 3 }];
+            if is_directional_focus(toward) && cursor.swipe_dead_end != Some(toward) {
+                if let Some(pan) = swipe_step_pan(wm, sid, toward, event.fingers, modifiers) {
+                    peek_px = step_peek_px(full_px, crate::shared::layout().swipe_near_peek_px, shape, pan);
+                }
+            }
+            let cursor = cursor_mut!(wm, sid, ());
+            if let Some(last) = cursor.swipe_lean_px {
+                peek_px = settle_peek(last, peek_px, event.dx.hypot(event.dy), threshold, full_px);
+            }
+            cursor.swipe_lean_px = Some(peek_px);
+        }
+        let cursor = cursor_mut!(wm, sid, ());
         let want = swipe_lean(dx, dy, navigates, threshold, peek_px, wm.desk_zoom);
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
         if delta != [0.0, 0.0] {

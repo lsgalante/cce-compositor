@@ -18,6 +18,10 @@ pub(crate) use gestures::*;
 mod border_zone;
 pub use border_zone::*;
 
+/// What a focus swipe's step target depends on (`Cursor::swipe_step_target`):
+/// the bind, the aim's direction in 64ths of a turn, the focused window.
+pub type SwipeHeading = (crate::config::Action, i32, Option<crate::window::WindowId>);
+
 pub struct Cursor {
     /// The id of the seat this cursor belongs to, for the `(wm, sid)`
     /// cursor functions. The cursor keeps no pointer to its seat: it is a
@@ -162,6 +166,20 @@ pub struct Cursor {
     /// peeked the desktop by so far — see `swipe_peek_for`. Zero outside a
     /// swipe, and restarts from zero at each fire, like the travel.
     pub swipe_peek: [f64; 2],
+    /// The window the focus step the in-flight swipe is heading for would
+    /// focus (`WindowManager::focus_step_target`), keyed by what decides
+    /// it — the bind, the aim's direction to a 64th of a turn, and the
+    /// focused window it aims from — so the policy is asked once per
+    /// heading rather than once per event. The inner `None` is a step that
+    /// focuses nothing. Only the window is kept: the pan to it is taken
+    /// afresh each event, from a camera that may be moving. Cleared at
+    /// swipe begin and at each fire.
+    pub swipe_step_target: Option<(SwipeHeading, Option<crate::window::WindowId>)>,
+    /// The `peek_px` the in-flight swipe's lean was last sized by, which
+    /// the next size moves from no faster than the fingers
+    /// (`policy::gesture::settle_peek`). `None` at swipe begin and after
+    /// each fire, when the travel, and so the lean, restarts from zero.
+    pub swipe_lean_px: Option<f64>,
     /// Finger count of a staged injected swipe (`pointer-swipe begin`),
     /// carried into its updates the way libinput repeats it per event.
     pub inject_swipe_fingers: u32,
@@ -269,6 +287,8 @@ impl Default for Cursor {
             swipe_spent: false,
             swipe_dead_end: None,
             swipe_peek: [0.0, 0.0],
+            swipe_step_target: None,
+            swipe_lean_px: None,
             inject_swipe_fingers: 3,
             panning_gesture_active: false,
             inject_natural: false,

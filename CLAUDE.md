@@ -1589,12 +1589,50 @@ pushed the new window's near edge off screen, or leaned away from the side
 it sits on, and it is only as large as bringing the window in needs. Until
 2026-09-24 such a target was dropped so the camera never reversed, which
 left the newly focused window clipped whenever the lean overshot; the
-diagonal lean and aiming by finger direction made that common. It does not predict the
-destination (tried on 2026-09-22 — a lean along the policy's predicted pan,
-nothing at all when the target was in view — and retired the same day: the
-lean is meant to answer the finger, not the layout), and it does not spring
-back to the origin (the first version did, and a switch between two
-windows both in view leaned out and back on every swipe). A shadow drives it staged — `ccectl pointer-swipe begin 3`,
+diagonal lean and aiming by finger direction made that common. Its
+direction does not predict the destination (tried on 2026-09-22 — a lean
+along the policy's predicted pan, nothing at all when the target was in
+view — and retired the same day: the lean is meant to answer the finger,
+not the layout), and it does not spring back to the origin (the first
+version did, and a switch between two windows both in view leaned out and
+back on every swipe).
+**A focus step's lean leaves little drift** (since 2026-10-13): its SIZE
+does read the layout. Since the camera stops where the lean left it, a
+full peek toward a window already on screen was pure drift — at
+`swipe_peek 120` the desk swayed 120 px on every switch between two
+windows in view. Now the lean is sized so that, once the step has fired,
+the camera is at most `window_manager { swipe_near_peek }` (screen px,
+default a quarter of `swipe_peek`; `swipe_near_peek_px`) from where the
+step would have put it unleaned (`policy::gesture::step_peek_px`, with
+`lean_drift` as the measure: per axis, the part of the lean past the step's
+own pan that way stays, all of it on an axis the step does not pan, none
+of it against the pan, because `pan_into_view` corrects each axis on its
+own). So a window in view leans `swipe_near_peek`; a straight lean toward
+one that needs a pan reaches that pan plus `swipe_near_peek`, the full peek
+for one a full peek or more away, as before; and a diagonal lean toward a
+window that needs a pan on one axis only is held to `swipe_near_peek` on
+the other. The direction still follows the fingers, and the lean still
+grows with the travel, only at a lower gain. The size moves toward each
+new value no faster than the fingers travel (`settle_peek`: a full peek
+per threshold of travel), so the aim crossing from a window in view to one
+far off, or to a dead end, grows the lean instead of jumping the camera in
+one frame (a shadow measured a 50 px jump for 4 units of travel before
+this). The pan comes from `WindowManager::focus_step_target` — the window
+the step would focus, the same policy call as `focus_toward_lands`, cached
+per heading (the bind, the aim's direction in 64ths of a turn, the focused
+window: `Cursor::swipe_step_target`, cleared at each fire) — and
+`focus_step_pan`, which runs `Seat::focus_pan_target`, the pure half of
+`focus_follow_pan`, from the camera as it stands with the lean taken back
+out, every event: that is the camera the fire pans from, since it stops
+any ease still running (after a step, that step's own) before focusing. The
+two can still disagree where `Seat::focus` skips the pan on its own — the
+first focus of a hint-placed window (`is_new && hint_placed`) — and the
+lean is then sized for a pan that never comes. A pan bind, and a focus
+with nowhere to go (the wall, for the rest of the swipe:
+`Cursor::swipe_dead_end`), keep the whole lean. `vector_focus` counts a
+center exactly on its cone's edge as inside (a 1e-9 tolerance): an exact
+45° aim read as outside at 70 units of travel and inside at 71, so the
+lean braced for a dead end and the step then fired. A shadow drives it staged — `ccectl pointer-swipe begin 3`,
 `update <dx> <dy>`, `end` — and reads the lean and its return back with
 `ccectl camera` (pan, zoom, pan target).
 

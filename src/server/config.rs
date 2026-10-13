@@ -217,6 +217,11 @@ pub struct Layout {
     /// step once a swipe has switched focus, screen px at
     /// `swipe_repeat_threshold` (default half of `swipe_peek_px`).
     pub swipe_repeat_peek_px: f64,
+    /// `window_manager { swipe_near_peek }`: how far a focus swipe's lean
+    /// may carry the camera past where its step will put it, screen px
+    /// (default a quarter of `swipe_peek_px`) — the whole lean toward a
+    /// window already in view. See `policy::gesture::step_peek_px`.
+    pub swipe_near_peek_px: f64,
     /// `window_manager { swipe_focus_cone }`: degrees off a focus swipe's
     /// direction within which a window center can take focus (default 45).
     /// See `focus_toward`.
@@ -393,6 +398,7 @@ impl Default for Layout {
             osk_on_touch: true,
             swipe_peek_px: 60.0,
             swipe_repeat_peek_px: 30.0,
+            swipe_near_peek_px: 15.0,
             swipe_focus_cone_deg: 45.0,
             swipe_threshold: 70.0,
             swipe_repeat_threshold: 280.0,
@@ -592,6 +598,13 @@ pub struct WindowManagerConfig {
     /// lean, so a swipe that has just switched reads as settled. KDL:
     /// `swipe_repeat_peek (f64)30.0`.
     pub swipe_repeat_peek: Option<f64>,
+    /// The most a focus swipe's lean may carry the camera past where its
+    /// step will put it, screen px (default a quarter of `swipe_peek`; 0
+    /// leans nothing toward a window already in view). A window on screen
+    /// leans this much rather than the full `swipe_peek`, which the camera
+    /// would keep as drift; one that needs a pan leans up to that pan plus
+    /// this. KDL: `swipe_near_peek (f64)15.0`.
+    pub swipe_near_peek: Option<f64>,
     /// How far off the swipe's own direction (degrees) a window center may
     /// lie and still take focus from a three-finger focus swipe (default
     /// 45; clamped to 1-89). A swipe toward nothing within it changes
@@ -1574,6 +1587,7 @@ style {
                 toggle_overview ("menu:swipe_up,swipe_down,swipe_left,swipe_right,pinch_in,pinch_out")"swipe_up"
                 swipe_peek (f64)40.0
                 swipe_repeat_peek (f64)15.0
+                swipe_near_peek (f64)10.0
                 swipe_focus_cone (f64)30.0
                 swipe_threshold (f64)80.0
                 swipe_repeat_threshold (f64)200.0
@@ -1587,6 +1601,7 @@ style {
         assert_eq!(wm.toggle_overview, Some("swipe_up".to_string()));
         assert_eq!(wm.swipe_peek, Some(40.0));
         assert_eq!(wm.swipe_repeat_peek, Some(15.0));
+        assert_eq!(wm.swipe_near_peek, Some(10.0));
         assert_eq!(wm.swipe_focus_cone, Some(30.0));
         assert_eq!(wm.swipe_threshold, Some(80.0));
         assert_eq!(wm.swipe_repeat_threshold, Some(200.0));

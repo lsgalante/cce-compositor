@@ -2259,14 +2259,45 @@ impl WindowManager {
     /// both paths, and the legacy arms do nothing with it either.
     pub fn focus_toward_lands(&mut self, v: Option<(f64, f64)>, action: &crate::config::Action) -> bool {
         crate::wm_scope!(mut);
+        !self.focus_step_commands(v, action).is_empty()
+    }
+
+    /// The commands a focus swipe's step would run — `focus_toward(v,
+    /// action)` with a vector and a focused window to aim from, the
+    /// four-way `action` otherwise — computed, not applied.
+    fn focus_step_commands(&mut self, v: Option<(f64, f64)>, action: &crate::config::Action) -> Vec<crate::policy::api::Command> {
+        crate::wm_scope!(mut);
         use crate::policy::api::Policy;
         let ctx = self.build_action_ctx();
         let has_ray = ctx.windows.iter().any(|w| w.focus_cyclable && Some(w.id) == ctx.focused);
-        let cmds = match v {
+        match v {
             Some(v) if has_ray => crate::policy::actions::focus_toward(&ctx, v, crate::shared::layout().swipe_focus_cone_deg),
             _ => crate::policy::actions::DefaultPolicy.action(&ctx, *action, None),
-        };
-        !cmds.is_empty()
+        }
+    }
+
+    /// The window a focus swipe's step would focus if it fired now
+    /// (`focus_step_commands`, the policy call `focus_toward_lands` makes),
+    /// or `None` when it would focus nothing — a dead end. Nothing is
+    /// applied.
+    pub fn focus_step_target(&mut self, v: Option<(f64, f64)>, action: &crate::config::Action) -> Option<crate::window::WindowId> {
+        crate::wm_scope!(mut);
+        use crate::policy::api::Command;
+        self.focus_step_commands(v, action).into_iter().find_map(|cmd| match cmd {
+            Command::Focus(id) => Some(id),
+            _ => None,
+        })
+    }
+
+    /// The camera move (screen px) focusing window `id` would make from
+    /// camera `origin`: `Seat::focus_pan_target`, the pan
+    /// `focus_follow_pan` applies, as a difference. `(0, 0)` when the
+    /// window is already in view. A focus swipe's lean sizes itself by
+    /// this (`policy::gesture::step_peek_px`).
+    pub fn focus_step_pan(&self, id: crate::window::WindowId, origin: crate::policy::camera::Camera) -> (f64, f64) {
+        crate::wm_scope!();
+        let to = self.first_seat().and_then(|sid| crate::seat::Seat::focus_pan_target(self, sid, id, origin));
+        to.map_or((0.0, 0.0), |c| ((c.pan_x - origin.pan_x) * origin.zoom, (c.pan_y - origin.pan_y) * origin.zoom))
     }
 
     /// A click on one of a window's buttons — the discs left of its

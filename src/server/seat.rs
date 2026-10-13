@@ -953,18 +953,36 @@ impl Seat {
     /// below); popups/overlays are not desk citizens, so other modes no-op,
     /// as do cce-cloud and windows already fully visible.
     pub fn focus_follow_pan(wm: &mut crate::window_manager::WindowManager, sid: SeatId, id: crate::window::WindowId) {
-        let this = seat_mut!(wm, sid, ());
-        if this.suppress_focus_pan {
-            return;
+        let Some(target) = Seat::focus_pan_target(wm, sid, id, wm.camera()) else { return };
+        wm.target_desk_pan_x = Some(target.pan_x);
+        wm.target_desk_pan_y = Some(target.pan_y);
+        wm.start_panning_animation();
+    }
+
+    /// Where `focus_follow_pan` would send the camera for window `id`,
+    /// from camera `cam` — `None` when focusing it moves nothing. Every
+    /// guard `focus_follow_pan` applies is here, so a focus swipe's lean,
+    /// which asks this before its step fires
+    /// (`WindowManager::focus_step_pan`), sizes itself by the pan the step
+    /// will make — except where `Seat::focus` skips the call altogether
+    /// (the first focus of a hint-placed window).
+    pub fn focus_pan_target(
+        wm: &crate::window_manager::WindowManager,
+        sid: SeatId,
+        id: crate::window::WindowId,
+        cam: crate::policy::camera::Camera,
+    ) -> Option<crate::policy::camera::Camera> {
+        if wm.seats.get(sid)?.suppress_focus_pan {
+            return None;
         }
         // While a camera ramp owns the camera (an overview enter/exit
         // flight), the current camera is a mid-flight sample — any pan
         // target computed from it is stale by construction. Never retarget
         // out from under the ramp.
         if wm.camera_ramp_anim.is_some() {
-            return;
+            return None;
         }
-        let Some(window) = wm.windows.get(id) else { return };
+        let window = wm.windows.get(id)?;
         // A fullscreen window that stepped aside was left on the desk
         // (`WindowManager::place_fullscreen_windows`); focusing it brings
         // the camera back to exactly the spot it covers, so it slides in
@@ -972,16 +990,11 @@ impl Seat {
         // point and the camera stays put.
         if window.is_fullscreen() {
             if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview {
-                return;
+                return None;
             }
-            if let Some((px, py)) = window.fullscreen_anchor_pan(wm) {
-                if (wm.desk_pan_x - px).abs() >= 0.5 || (wm.desk_pan_y - py).abs() >= 0.5 {
-                    wm.target_desk_pan_x = Some(px);
-                    wm.target_desk_pan_y = Some(py);
-                    wm.start_panning_animation();
-                }
-            }
-            return;
+            let (px, py) = window.fullscreen_anchor_pan(wm)?;
+            let moves = (cam.pan_x - px).abs() >= 0.5 || (cam.pan_y - py).abs() >= 0.5;
+            return moves.then_some(crate::policy::camera::Camera { pan_x: px, pan_y: py, zoom: cam.zoom });
         }
         if !matches!(
                 window.tiling_mode,
@@ -992,11 +1005,11 @@ impl Seat {
                     | crate::tiling::TilingMode::Utility
             )
         {
-            return;
+            return None;
         }
         let app_id = window.get_app_id_string();
         if app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false) {
-            return;
+            return None;
         }
         // The box of the output the window sits on, else the first enabled.
         let mut target_box: Option<ffi::wlr_box> = None;
@@ -1017,51 +1030,45 @@ impl Seat {
             }
         }
 
-        if let Some(wlr_box) = target_box {
-            let viewport_w = wlr_box.width as f64;
-            let viewport_h = wlr_box.height as f64;
+        let wlr_box = target_box?;
+        let viewport_w = wlr_box.width as f64;
+        let viewport_h = wlr_box.height as f64;
 
-            let fw = if window.box_geom.width > 0 {
-                window.box_geom.width as f64
-            } else if window.wm_scheduled.dimensions_hint.min_width > 32 {
-                window.wm_scheduled.dimensions_hint.min_width as f64
-            } else {
-                800.0
-            };
-            let fh = if window.box_geom.height > 0 {
-                window.box_geom.height as f64
-            } else if window.wm_scheduled.dimensions_hint.min_height > 32 {
-                window.wm_scheduled.dimensions_hint.min_height as f64
-            } else {
-                600.0
-            };
+        let fw = if window.box_geom.width > 0 {
+            window.box_geom.width as f64
+        } else if window.wm_scheduled.dimensions_hint.min_width > 32 {
+            window.wm_scheduled.dimensions_hint.min_width as f64
+        } else {
+            800.0
+        };
+        let fh = if window.box_geom.height > 0 {
+            window.box_geom.height as f64
+        } else if window.wm_scheduled.dimensions_hint.min_height > 32 {
+            window.wm_scheduled.dimensions_hint.min_height as f64
+        } else {
+            600.0
+        };
 
-            let cam = wm.camera();
-            // box_geom is already virtual units (its screen footprint is
-            // box_geom * zoom) — dividing by zoom here inflated the window
-            // whenever zoom != 1 and mistargeted the pan.
-            let vw_w = fw;
-            let vw_h = fh;
-            // The camera moves as little as the focus demands: enough to
-            // show the whole window with a margin, and no further. A window
-            // half off the edge and one a screen away take the same rule —
-            // `policy::camera::pan_into_view` carries the reasoning, and
-            // `WindowManager::pan_to_virtual_rect` applies it to the
-            // non-window rects (restore placeholders) from the same place.
-            if let Some(target) = crate::policy::camera::pan_into_view(
-                window.virtual_x,
-                window.virtual_y,
-                vw_w,
-                vw_h,
-                cam,
-                viewport_w,
-                viewport_h,
-            ) {
-                wm.target_desk_pan_x = Some(target.pan_x);
-                wm.target_desk_pan_y = Some(target.pan_y);
-                wm.start_panning_animation();
-            }
-        }
+        // box_geom is already virtual units (its screen footprint is
+        // box_geom * zoom) — dividing by zoom here inflated the window
+        // whenever zoom != 1 and mistargeted the pan.
+        let vw_w = fw;
+        let vw_h = fh;
+        // The camera moves as little as the focus demands: enough to
+        // show the whole window with a margin, and no further. A window
+        // half off the edge and one a screen away take the same rule —
+        // `policy::camera::pan_into_view` carries the reasoning, and
+        // `WindowManager::pan_to_virtual_rect` applies it to the
+        // non-window rects (restore placeholders) from the same place.
+        crate::policy::camera::pan_into_view(
+            window.virtual_x,
+            window.virtual_y,
+            vw_w,
+            vw_h,
+            cam,
+            viewport_w,
+            viewport_h,
+        )
     }
 
     /// Snap parameters for interactive ops, from the current layout config.
