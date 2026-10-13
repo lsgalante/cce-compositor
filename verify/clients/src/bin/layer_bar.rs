@@ -124,8 +124,7 @@ fn buffer(shm: &wl_shm::WlShm, w: i32, h: i32, argb: u32, qh: &QueueHandle<State
 /// Send `fade-out` on the compositor's control socket and return its reply.
 fn fade_out() -> String {
     use std::io::{Read, Write as _};
-    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
-    let path = format!("/tmp/cce-{display}.sock");
+    let path = cce_core::ipc::ctl::control_socket();
     let Ok(mut sock) = std::os::unix::net::UnixStream::connect(&path) else {
         return format!("error: no control socket at {path}");
     };

@@ -553,14 +553,14 @@ impl Output {
         }
 
         // Overview-delay debugging: with `CCE_OVDBG=1` in the compositor's
-        // environment, while /tmp/cce-ovdbg exists (contents = comma-separated
-        // app_id substrings), dump the scene-side truth for matching windows
-        // every rendered frame. Toggle live with
-        // `echo firefox,cce-calendar > /tmp/cce-ovdbg`; `rm` to stop. The env
-        // gate is what keeps a release build from doing an open()+read() of
-        // that path on every frame it ever renders.
-        if ovdbg_enabled() {
-        if let Ok(filter) = std::fs::read_to_string("/tmp/cce-ovdbg") {
+        // environment, while `$XDG_RUNTIME_DIR/cce/ovdbg` exists (contents =
+        // comma-separated app_id substrings), dump the scene-side truth for
+        // matching windows every rendered frame. Toggle live with
+        // `echo firefox,cce-calendar > $XDG_RUNTIME_DIR/cce/ovdbg`; `rm` to
+        // stop. The env gate is what keeps a release build from doing an
+        // open()+read() of that path on every frame it ever renders.
+        if let Some(path) = ovdbg_path() {
+        if let Ok(filter) = std::fs::read_to_string(path) {
             let pats: Vec<&str> = filter.trim().split(',').filter(|p| !p.is_empty()).collect();
             for window in wm.windows.values() {
                 if window.closed {
@@ -1293,11 +1293,13 @@ pub(crate) fn frame_debug() -> bool {
     *FLAG.get_or_init(|| std::env::var_os("CCE_FRAME_DEBUG").is_some())
 }
 
-/// `CCE_OVDBG=1` arms the `/tmp/cce-ovdbg` per-frame scene dump (see
-/// `render_and_commit`); without it the file is never even looked for.
-fn ovdbg_enabled() -> bool {
-    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| std::env::var_os("CCE_OVDBG").is_some())
+/// `CCE_OVDBG=1` arms the per-frame scene dump (see `render_and_commit`):
+/// the filter file it reads, `$XDG_RUNTIME_DIR/cce/ovdbg`. Without the
+/// variable there is no path, and the file is never even looked for.
+fn ovdbg_path() -> Option<&'static std::path::Path> {
+    static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| std::env::var_os("CCE_OVDBG").map(|_| cce_core::config::cce_runtime_dir().join("ovdbg")))
+        .as_deref()
 }
 
 impl Output {

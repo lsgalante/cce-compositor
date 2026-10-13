@@ -147,8 +147,8 @@ fn make_pool_fd() -> OwnedFd {
 
 fn spawn_dismiss_listener(tx: mpsc::Sender<()>) {
     std::thread::spawn(move || {
-        let display = std::env::var("WAYLAND_DISPLAY").expect("WAYLAND_DISPLAY not set");
-        let path = format!("/tmp/cce-status-interface-{}.sock", display);
+        std::env::var("WAYLAND_DISPLAY").expect("WAYLAND_DISPLAY not set");
+        let path = cce_core::ipc::ctl::status_socket();
         let mut stream = None;
         for _ in 0..50 {
             match std::os::unix::net::UnixStream::connect(&path) {

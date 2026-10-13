@@ -77,6 +77,9 @@ xkbcommon = "0.8"
 libc = "0.2"
 x11rb = "0.13"
 wayland-scanner = "0.31"
+# The socket names (`ipc::ctl::{control_socket, status_socket}`), spelled once
+# in cce-core rather than again here.
+cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "388473078207ff41208e8648c04499e94632f20a", default-features = false }
 
 # Deliberately NOT a member of the cce workspace: these are test clients built
 # on demand by verify/ scripts, invisible to ccebuild and `cargo build` at the

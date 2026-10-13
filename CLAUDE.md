@@ -1970,7 +1970,7 @@ headless seat has no keyboard and Chromium crashes in
   bursts the panel's commits hit left the screen stale until something
   else moved; the error is logged once per 10 s with a count.
 
-  **Per-frame work is gated too.** The `/tmp/cce-ovdbg` scene dump needs `CCE_OVDBG=1` in the environment
+  **Per-frame work is gated too.** The `$XDG_RUNTIME_DIR/cce/ovdbg` scene dump needs `CCE_OVDBG=1` in the environment
   before the file is even looked for. The window-stream tick runs only while
   the stream hub has subscribers (the accept thread's eventfd arms it), and a
   failed tearing test is not repeated every frame of the same fullscreen
