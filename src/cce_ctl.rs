@@ -50,8 +50,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  min-size forget <app_id|id> # drop an open X11 window's learned minimum (relearned on refusal)");
     print("  min-size forget-entry <n>  # drop stored entry n from `min-size list`");
     print("  move-window-left|-right|-up|-down    # step the focused window one grid cell;");
-    print("                              # tiled swaps with the tiled window already there,");
-    print("                              # floating just moves");
+    print("                              # it covers whatever is there (tiled windows stack)");
     print("  place-next <app_id> <x> <y> # one-shot: next map of app_id lands near this layout pos");
     print("  place-next-cell <app_id> <x> <y> # one-shot: next map covers the grid square at this pos,");
     print("                              # keeping its size and growing away from its neighbours");

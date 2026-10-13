@@ -1841,11 +1841,11 @@ one, so a window pressed, focused or moved comes out on top. The planes
 are unchanged — `render_finish` still draws every Floating (and Utility)
 window above every Tiled one, whatever the render-list order, so a raised
 tiled window rises only among the tiled windows. The keyboard
-`move_window_*` step still SWAPS a tiled window with the one tiled window
-in its destination (`cce-window-manager` `actions::move_tiled`): that is an
-explicit command, not an automatic move. Left behind in the policy crate,
-no longer called for tiled windows: `overview::displace`'s tiled branch and
-`spawn::nearest_free`. Stacking order is not saved, so a session restore
+`move_window_*` step stacks too (`cce-window-manager` `actions::move_window`):
+a tiled window steps one cell and covers whatever is there, where it used
+to swap origins with the tiled window holding the destination. Left behind
+in the policy crate, no longer called for tiled windows:
+`overview::displace`'s tiled branch and `spawn::nearest_free`. Stacking order is not saved, so a session restore
 re-stacks in map order. In a shadow: two `set-mode tiled` windows, an
 overview drag of one onto the other (`pointer-press` / `pointer-move-to` /
 `pointer-release`), then `ctl windows` shows both on the same cells and
