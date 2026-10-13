@@ -139,6 +139,10 @@ impl PointerConstraint {
     /// surfaces. It takes effect while that surface has keyboard focus
     /// (`Seat::sync_pointer_constraint` hands it over on focus changes) and
     /// the pointer is over its region.
+    ///
+    /// # Safety
+    /// `wlr_constraint` must be a new constraint, as the manager's
+    /// `new_constraint` signal hands one: its `data` is taken here.
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, wlr_constraint: *mut ffi::wlr_pointer_constraint_v1) -> *mut Self {
         let constraint = Box::into_raw(Box::new(Self {
             // SAFETY: the destroy handler takes it before the box goes,
@@ -192,7 +196,7 @@ impl PointerConstraint {
             return;
         }
         let Some(seat) = self.seat(wm) else { return };
-        if seat.cursor.constraint() != self as *mut Self {
+        if !std::ptr::eq(seat.cursor.constraint(), self) {
             return;
         }
         if self.is_active() {
@@ -366,7 +370,7 @@ impl PointerConstraint {
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, destroy_listener) as *mut PointerConstraint;
+    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, destroy_listener);
     let constraint = &mut *constraint_ptr;
     // The seat that holds the constraint's `wlr_seat`, found without the
     // store: this runs inside window-manager calls (a oneshot deactivation
@@ -398,7 +402,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, data: *mut 
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, commit_listener) as *mut PointerConstraint;
+    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, commit_listener);
     handle_commit_impl(&mut *constraint_ptr, wm, constraint_ptr);
     // The borrow above has ended; a oneshot constraint may go here.
     flush_deactivation(constraint_ptr);
@@ -421,7 +425,7 @@ fn handle_commit_impl(constraint: &mut PointerConstraint, wm: &crate::window_man
 }
 
 unsafe extern "C" fn handle_node_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, node_destroy_listener) as *mut PointerConstraint;
+    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, node_destroy_listener);
     log::info!("deactivating pointer constraint, scene node destroyed");
     // A scene node goes inside window-manager calls (a window unmapping),
     // so this must not take the window manager: the seat comes from

@@ -45,17 +45,13 @@ const LOCK_BEFORE_SLEEP_MS: i32 = 3000;
 
 /// The `idle { }` block, in seconds; 0 disables a timeout.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct IdleConfig {
     pub display_off_s: i64,
     pub sleep_s: i64,
     pub sleep_command: Option<String>,
 }
 
-impl Default for IdleConfig {
-    fn default() -> Self {
-        Self { display_off_s: 0, sleep_s: 0, sleep_command: None }
-    }
-}
 
 /// Re-arming the timers on every pointer-motion event would be a pair of
 /// `timerfd_settime` calls per event; once a second is plenty for timeouts
@@ -219,6 +215,11 @@ fn now_ms() -> u64 {
 }
 
 impl IdleManager {
+    /// # Safety
+    /// `self` must be the `idle` field of the live `Server` `server` points
+    /// to (where the session listener and the timers find it), and
+    /// [`deinit`](Self::deinit) must run before that server's `session`,
+    /// when set, is destroyed.
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.display_timer = crate::event_source::Timer::on_shared_loop(handle_display_timeout, 0);
         if !self.display_timer.is_set() {
@@ -364,7 +365,7 @@ impl IdleManager {
         // idle manager by place; `plan_inotify` keeps the fd open until
         // `unwatch_plan_dir`, which removes this source first.
         let source = unsafe {
-            crate::event_source::FdSource::on_shared_loop(fd, ffi::WL_EVENT_READABLE as u32, handle_plan_inotify, 0)
+            crate::event_source::FdSource::on_shared_loop(fd, ffi::WL_EVENT_READABLE, handle_plan_inotify, 0)
         };
         if !source.is_set() {
             unsafe { libc::close(fd) };

@@ -9,6 +9,9 @@ pub struct LibinputAccelConfig {
 }
 
 impl LibinputAccelConfig {
+    /// # Safety
+    /// `client` must point to a live `wl_client` (the one whose
+    /// `create_accel_config` request this answers).
     pub unsafe fn create(
         client: *mut ffi::wl_client,
         version: u32,
@@ -87,7 +90,7 @@ unsafe extern "C" fn accel_config_set_points(
             ffi::wl_resource_post_error(
                 resource,
                 ffi::river_libinput_accel_config_v1_error_RIVER_LIBINPUT_ACCEL_CONFIG_V1_ERROR_INVALID_ARG,
-                b"invalid accel_type enum value\0".as_ptr() as *const _,
+                c"invalid accel_type enum value".as_ptr(),
             );
             return;
         }
@@ -97,18 +100,18 @@ unsafe extern "C" fn accel_config_set_points(
         ffi::wl_resource_post_error(
             resource,
             ffi::river_libinput_accel_config_v1_error_RIVER_LIBINPUT_ACCEL_CONFIG_V1_ERROR_INVALID_ARG,
-            b"invalid step argument\0".as_ptr() as *const _,
+            c"invalid step argument".as_ptr(),
         );
         return;
     }
 
     let step = *((*step_arr).data as *const f64);
 
-    if (*points_arr).size == 0 || (*points_arr).size % std::mem::size_of::<f64>() as usize != 0 {
+    if (*points_arr).size == 0 || !(*points_arr).size.is_multiple_of(std::mem::size_of::<f64>() as usize) {
         ffi::wl_resource_post_error(
             resource,
             ffi::river_libinput_accel_config_v1_error_RIVER_LIBINPUT_ACCEL_CONFIG_V1_ERROR_INVALID_ARG,
-            b"invalid points argument\0".as_ptr() as *const _,
+            c"invalid points argument".as_ptr(),
         );
         return;
     }

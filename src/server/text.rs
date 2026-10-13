@@ -294,6 +294,10 @@ impl LabelCache {
     pub fn len(&self) -> usize {
         self.entries.len() + self.squares.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty() && self.squares.is_empty()
+    }
 }
 
 impl Drop for LabelCache {

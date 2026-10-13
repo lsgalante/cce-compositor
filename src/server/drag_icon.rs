@@ -19,6 +19,9 @@ pub struct DragIcon {
 unsafe impl crate::listener::Anchored for DragIcon {}
 
 impl DragIcon {
+    /// # Safety
+    /// `wlr_drag_icon` must point to a live `wlr_drag_icon` (a starting
+    /// drag's); the `DragIcon` made for it is freed by its destroy signal.
     pub unsafe fn create(
         wlr_drag_icon: *mut ffi::wlr_drag_icon,
         cursor: &mut Cursor,

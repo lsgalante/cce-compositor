@@ -143,6 +143,10 @@ impl InputManager {
         }
     }
 
+    /// # Safety
+    /// `server` must point to the live `Server` (display and backend made,
+    /// `xwayland` null or live), and `self` be its `input_manager`: the
+    /// global and its objects reach the manager by this address.
     pub unsafe fn init(&mut self, server: *mut Server, seats: &mut crate::seat::Seats) -> Result<(), &'static str> {
         let wl_server = (*server).wl_server;
 
@@ -225,6 +229,10 @@ impl InputManager {
         }
     }
 
+    /// # Safety
+    /// While the display is still live, with `global` null or the one
+    /// [`init`](Self::init) made; every seat in `wm.seats` came from
+    /// `Seat::create` (each is destroyed here).
     pub unsafe fn deinit(&mut self, wm: &mut crate::window_manager::WindowManager, sys: &mut crate::ctx::Sys) {
         log::info!("[deinit] InputManager::deinit started");
         POINTER_REFRESH.with(|r| r.cancel());
@@ -372,7 +380,7 @@ unsafe extern "C" fn input_manager_destroy(
     ffi::wl_resource_post_error(
         resource,
         ffi::river_input_manager_v1_error_RIVER_INPUT_MANAGER_V1_ERROR_INVALID_DESTROY,
-        b"destroy before finished event sent\0".as_ptr() as *const _,
+        c"destroy before finished event sent".as_ptr(),
     );
 }
 

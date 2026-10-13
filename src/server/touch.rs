@@ -232,7 +232,9 @@ fn bind_fingers(fingers: usize) -> u32 {
 
 /// The gesture the compositor holds (`Cursor::touch_claim`).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Default)]
 pub enum Claim {
+    #[default]
     None,
     /// One finger from a bound edge (see the module comment).
     Edge { id: i32, edge: Edge, start: (f64, f64), fired: bool },
@@ -243,11 +245,6 @@ pub enum Claim {
     Multi { track: Track, kind: MultiKind },
 }
 
-impl Default for Claim {
-    fn default() -> Self {
-        Claim::None
-    }
-}
 
 impl Cursor {
     /// Decide where a new finger at `lx, ly` goes. In window-adjust mode
@@ -299,7 +296,7 @@ impl Cursor {
         crate::seat::Seat::handle_activity(wm, sid, sys);
         // A touch is deliberate input, like a press (see `Seat::focus`).
         wm.startup_input_seen = true;
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.hide_for_touch();
         // A device that reuses a live id without lifting it first has lost
         // the up; finish the old point so its button or client is released.
@@ -308,7 +305,7 @@ impl Cursor {
             Cursor::touch_up(wm, sid, id, time_msec, sys);
         }
 
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         match this.touch_claim {
             // A second finger is not an edge swipe: hand the first back
             // before routing this one.
@@ -333,7 +330,7 @@ impl Cursor {
             Claim::None => {}
         }
 
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let already = this.touch_points.len();
         if already == 0 {
             if let Some(edge) = this.bound_edge_at(lx, ly) {
@@ -346,7 +343,7 @@ impl Cursor {
         let pointer_pressed = this.touch_points.values().any(|p| matches!(p.route, TouchRoute::Pointer { pressed: true, .. }));
         if already + 1 >= 3 && !pointer_pressed {
             Cursor::claim_all(wm, sid, sys);
-            let this = cursor_mut!(wm, sid, ());
+            let this = cursor_mut!(wm, sid);
             this.touch_points.insert(id, TouchPoint { lx, ly, route: TouchRoute::Claimed });
             this.touch_claim = Claim::Multi { track: Track::new(this.claimed_shape()), kind: MultiKind::Undecided };
             log::debug!("touch: {} fingers claimed for a gesture", this.touch_points.len());
@@ -359,7 +356,7 @@ impl Cursor {
                 .any(|p| matches!(p.route, TouchRoute::Pointer { pressed: false, on_desk: true, .. }));
             if first_on_desk {
                 Cursor::claim_all(wm, sid, sys);
-                let this = cursor_mut!(wm, sid, ());
+                let this = cursor_mut!(wm, sid);
                 this.touch_points.insert(id, TouchPoint { lx, ly, route: TouchRoute::Claimed });
                 Cursor::start_desk(wm, sid);
                 return;
@@ -375,7 +372,7 @@ impl Cursor {
         if let SceneNodeDataVal::Window(window_id) = result.data {
             if let Some(window) = wm.windows.get(window_id) {
                 if !window.is_status_bar() && !window.is_wallpaper() {
-                    seat_mut!(wm, sid, ()).relay.osk.note_touch();
+                    seat_mut!(wm, sid).relay.osk.note_touch();
                 }
             }
         }
@@ -384,7 +381,7 @@ impl Cursor {
     /// Route a finger normally (`touch_route_at`) and deliver its down.
     fn touch_begin(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, id: i32, lx: f64, ly: f64, time_msec: u32, sys: &mut crate::ctx::Sys) {
         let route = Cursor::touch_route_at(wm, sid, lx, ly);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.touch_points.insert(id, TouchPoint { lx, ly, route });
         log::debug!("touch: down id={id} at ({lx:.0}, {ly:.0}) -> {route:?}");
 
@@ -398,7 +395,7 @@ impl Cursor {
                         if let Some(window) = wm.windows.get(window_id) {
                             if !window.is_status_bar() && !window.is_wallpaper() {
                                 crate::seat::Seat::focus_window(wm, sid, Some(window_id));
-                                seat_mut!(wm, sid, ()).relay.osk.note_touch();
+                                seat_mut!(wm, sid).relay.osk.note_touch();
                             }
                         }
                     }
@@ -419,7 +416,7 @@ impl Cursor {
                 // SAFETY: the surface the hit test above returned; focusing
                 // dispatches no client, so nothing has destroyed it.
                 unsafe {
-                    seat_mut!(wm, sid, ()).wlr_seat().touch_notify_down(
+                    seat_mut!(wm, sid).wlr_seat().touch_notify_down(
                         result.surface,
                         time_msec,
                         id,
@@ -436,7 +433,7 @@ impl Cursor {
 
     pub fn touch_motion(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, id: i32, lx: f64, ly: f64, time_msec: u32, sys: &mut crate::ctx::Sys) {
         crate::seat::Seat::handle_activity(wm, sid, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let Some(point) = this.touch_points.get_mut(&id) else { return };
         point.lx = lx;
         point.ly = ly;
@@ -483,7 +480,7 @@ impl Cursor {
 
     pub fn touch_up(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, id: i32, time_msec: u32, sys: &mut crate::ctx::Sys) {
         crate::seat::Seat::handle_activity(wm, sid, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let Some(point) = this.touch_points.remove(&id) else { return };
         match point.route {
             TouchRoute::Claimed => Cursor::claim_lift(wm, sid, id, point, time_msec, false, sys),
@@ -491,7 +488,7 @@ impl Cursor {
                 // A field that starts editing on the release is still this
                 // touch's (`osk.rs`).
                 Cursor::note_touch_for_osk(wm, sid, point.lx, point.ly);
-                let this = cursor_mut!(wm, sid, ());
+                let this = cursor_mut!(wm, sid);
                 this.wlr_seat().touch_notify_up(time_msec, id);
             }
             TouchRoute::Pointer { start, pressed: false, .. } => {
@@ -513,7 +510,7 @@ impl Cursor {
     /// behind — and one that never pressed clicks nothing.
     pub fn touch_cancel(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, id: i32, sys: &mut crate::ctx::Sys) {
         crate::seat::Seat::handle_activity(wm, sid, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let Some(point) = this.touch_points.remove(&id) else { return };
         match point.route {
             TouchRoute::Claimed => Cursor::claim_lift(wm, sid, id, point, crate::util::msec_timestamp(), true, sys),
@@ -539,10 +536,10 @@ impl Cursor {
     /// `wl_touch.cancel`, and a pointer finger that never pressed is simply
     /// dropped (the reason the press waits).
     fn claim_all(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, sys: &mut crate::ctx::Sys) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let ids: Vec<i32> = this.touch_points.keys().copied().collect();
         for id in ids {
-            let this = cursor_mut!(wm, sid, ());
+            let this = cursor_mut!(wm, sid);
             let point = this.touch_points.get_mut(&id).unwrap();
             let route = std::mem::replace(&mut point.route, TouchRoute::Claimed);
             match route {
@@ -573,7 +570,7 @@ impl Cursor {
 
     fn start_desk(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         wm.stop_panning_animation();
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.touch_claim = Claim::Desk {
             track: Track::new(this.claimed_shape()),
             start_zoom: wm.desk_zoom,
@@ -584,7 +581,7 @@ impl Cursor {
     }
 
     fn claim_motion(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, time_msec: u32, sys: &mut crate::ctx::Sys) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let s = this.claimed_shape();
         match this.touch_claim {
             Claim::None => {}
@@ -598,7 +595,7 @@ impl Cursor {
                     EdgeProgress::NotEdge => Cursor::edge_release(wm, sid, time_msec, sys),
                     EdgeProgress::Fire => {
                         this.touch_claim = Claim::Edge { id, edge, start, fired: true };
-                        let mods = gesture_mods(&seat_mut!(wm, sid, ()).wlr_seat());
+                        let mods = gesture_mods(seat_mut!(wm, sid).wlr_seat());
                         if let Some((action, command)) = gesture_bind("edge", 1, mods, |d| d == edge.name()) {
                             log::info!("touch: edge_{} fired {action:?}", edge.name());
                             run_gesture_action(wm, action, command.as_deref());
@@ -626,7 +623,7 @@ impl Cursor {
                     let (ax, ay) = output_local(s.centroid);
                     wm.queue_pinch(zoom, ax, ay);
                 }
-                let this = cursor_mut!(wm, sid, ());
+                let this = cursor_mut!(wm, sid);
                 this.touch_claim = Claim::Desk { track, start_zoom, vel, last_ms };
             }
             Claim::Multi { mut track, kind } => {
@@ -656,7 +653,7 @@ impl Cursor {
                     MultiKind::Pinch { fired: false } => Cursor::touch_pinch(wm, sid, fingers, track.scale),
                     fired @ MultiKind::Pinch { fired: true } => fired,
                 };
-                let this = cursor_mut!(wm, sid, ());
+                let this = cursor_mut!(wm, sid);
                 this.touch_claim = Claim::Multi { track, kind };
             }
         }
@@ -665,7 +662,7 @@ impl Cursor {
     /// A claimed finger lifted (or was cancelled). The gesture ends with
     /// its last finger.
     fn claim_lift(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, id: i32, point: TouchPoint, time_msec: u32, cancelled: bool, sys: &mut crate::ctx::Sys) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         match this.touch_claim {
             Claim::None => {}
             Claim::Edge { id: edge_id, start, fired, .. } => {
@@ -712,7 +709,7 @@ impl Cursor {
     /// The edge finger is not an edge swipe after all: route it normally
     /// from where it went down, and catch it up to where it is.
     fn edge_release(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, time_msec: u32, sys: &mut crate::ctx::Sys) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let Claim::Edge { id, start, .. } = this.touch_claim else { return };
         this.touch_claim = Claim::None;
         let Some(now) = this.touch_points.get(&id).map(|p| (p.lx, p.ly)) else { return };
@@ -738,7 +735,7 @@ impl Cursor {
             (Edge::Top, ly - y0 < EDGE_ZONE && beyond_is_empty(lx, y0 - 1.0)),
             (Edge::Bottom, y1 - ly <= EDGE_ZONE && beyond_is_empty(lx, y1 + 1.0)),
         ];
-        let mods = gesture_mods(&self.wlr_seat());
+        let mods = gesture_mods(self.wlr_seat());
         candidates
             .into_iter()
             .filter(|&(_, near)| near)
@@ -748,16 +745,16 @@ impl Cursor {
 
     /// One stage of a touchscreen swipe, through the touchpad's handling.
     fn touch_swipe(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, stage: &str, fingers: u32, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.gesture_from_touch = true;
         Cursor::inject_swipe_stage(wm, sid, stage, fingers, dx, dy, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.gesture_from_touch = false;
     }
 
     /// Fire a pinch bind if the spread has gone far enough; once per gesture.
     fn touch_pinch(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, fingers: u32, scale: f64) -> MultiKind {
-        let mods = gesture_mods(&seat_mut!(wm, sid, MultiKind::Undecided).wlr_seat());
+        let mods = gesture_mods(seat_mut!(wm, sid, MultiKind::Undecided).wlr_seat());
         match gesture_bind("pinch", fingers, mods, |d| pinch_hits(d, scale)) {
             Some((action, command)) => {
                 log::info!("touch: pinch fired {action:?}");

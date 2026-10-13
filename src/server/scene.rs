@@ -111,6 +111,8 @@ impl Scene {
         }
     }
 
+    /// # Safety
+    /// `linux_dmabuf` must be null or the live linux-dmabuf global.
     pub unsafe fn init(
         &mut self,
         linux_dmabuf: *mut ffi::wlr_linux_dmabuf_v1,
@@ -365,6 +367,12 @@ impl Scene {
     }
 }
 
+impl Default for Scene {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct AtResult {
     pub node: *mut ffi::wlr_scene_node,
     pub surface: *mut ffi::wlr_surface,
@@ -384,6 +392,8 @@ pub struct SaveableSurfaces {
 }
 
 impl SaveableSurfaces {
+    /// # Safety
+    /// `parent` must be null or a live tree.
     pub unsafe fn init(parent: *mut ffi::wlr_scene_tree) -> Result<Self, &'static str> {
         let tree = crate::scene_handle::SceneTree::create_in(parent);
         let saved_tree = crate::scene_handle::SceneTree::create_in(parent);

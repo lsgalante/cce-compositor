@@ -83,6 +83,10 @@ impl KeyboardGroup {
         &mut self.wlr_keyboard
     }
 
+    /// # Safety
+    /// `seat` must be null or a live seat with no other live reference to
+    /// it, and `config.keymap` null or a live keymap (the group takes its
+    /// own reference).
     pub unsafe fn create(
         seat: *mut Seat,
         config: KeyboardConfig,
@@ -109,7 +113,7 @@ impl KeyboardGroup {
         ffi::river_wlr_keyboard_init(
             &mut (*group_ptr).wlr_keyboard,
             Some(led_update),
-            b"river.KeyboardGroup\0".as_ptr() as *const _,
+            c"river.KeyboardGroup".as_ptr(),
         );
 
         ffi::river_wlr_keyboard_set_data(&mut (*group_ptr).wlr_keyboard, group_ptr as *mut _);
@@ -147,13 +151,13 @@ impl KeyboardGroup {
     /// unref takes the group out of every seat's registry by place.
     pub unsafe fn unref(&mut self, seat: *mut Seat, to_release: &[u32]) {
         for &keycode in to_release {
-            let mut event = ffi::wlr_keyboard_key_event {
+            let event = ffi::wlr_keyboard_key_event {
                 time_msec: crate::util::msec_timestamp(),
                 keycode,
                 update_state: true,
                 state: ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED,
             };
-            self.process_key(&mut event);
+            self.process_key(&event);
         }
 
         self.ref_count -= 1;
@@ -172,7 +176,7 @@ impl KeyboardGroup {
         self.modifiers_listener.disconnect();
 
         // If the currently active keyboard of a seat is destroyed, we need to set a new active keyboard.
-        if !seat.is_null() && (*seat).wlr_seat().keyboard() == &mut self.wlr_keyboard as *mut ffi::wlr_keyboard {
+        if !seat.is_null() && std::ptr::eq((*seat).wlr_seat().keyboard(), &self.wlr_keyboard) {
             match (*seat).keyboard_groups().first() {
                 Some(&other_group) => ffi::wlr_seat_set_keyboard((*seat).wlr_seat().ptr(), &mut (*other_group).wlr_keyboard),
                 None => ffi::wlr_seat_set_keyboard((*seat).wlr_seat().ptr(), std::ptr::null_mut()),
@@ -188,6 +192,10 @@ impl KeyboardGroup {
         let _boxed = Box::from_raw(self);
     }
 
+    /// # Safety
+    /// `config` must point to a valid `KeyboardConfig`, and its keymap and
+    /// the group's each be null or live. On a match `config`'s keymap
+    /// reference is traded for one on the group's.
     pub unsafe fn match_config(&self, config: *mut KeyboardConfig) -> bool {
         if self.config.repeat_rate != (*config).repeat_rate {
             return false;
@@ -228,6 +236,10 @@ impl KeyboardGroup {
         matched
     }
 
+    /// # Safety
+    /// `event` must point to a valid key event. This emits the group's key
+    /// signal, whose handler takes the window manager and the server's
+    /// subsystems: no reference into them may be live.
     pub unsafe fn process_key(&mut self, event: *const ffi::wlr_keyboard_key_event) {
         if let Some(key) = self.pressed.get_mut(&(*event).keycode) {
             assert!(key.count > 0);
@@ -245,19 +257,23 @@ impl KeyboardGroup {
                     ffi::wlr_keyboard_notify_key(&mut self.wlr_keyboard, &mut key_event);
                 }
             }
-        } else if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
-            if self.pressed.len() < 32 {
-                let mut key_event = ffi::wlr_keyboard_key_event {
-                    time_msec: (*event).time_msec,
-                    keycode: (*event).keycode,
-                    update_state: true,
-                    state: ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED,
-                };
-                ffi::wlr_keyboard_notify_key(&mut self.wlr_keyboard, &mut key_event);
-            }
+        } else if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
+            && self.pressed.len() < 32
+        {
+            let mut key_event = ffi::wlr_keyboard_key_event {
+                time_msec: (*event).time_msec,
+                keycode: (*event).keycode,
+                update_state: true,
+                state: ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED,
+            };
+            ffi::wlr_keyboard_notify_key(&mut self.wlr_keyboard, &mut key_event);
         }
     }
 
+    /// # Safety
+    /// This emits the group's modifiers signal, whose handler takes the
+    /// window manager and reads the server's xkb config: no reference into
+    /// either may be live.
     pub unsafe fn process_modifiers(&mut self, modifiers: ffi::wlr_keyboard_modifiers) {
         ffi::wlr_keyboard_notify_modifiers(
             &mut self.wlr_keyboard,
@@ -268,10 +284,16 @@ impl KeyboardGroup {
         );
     }
 
+    /// # Safety
+    /// `keymap` must be a live `xkb_keymap` (wlroots takes its own
+    /// reference).
     pub unsafe fn process_keymap(&mut self, keymap: *mut ffi::xkb_keymap) {
         ffi::wlr_keyboard_set_keymap(&mut self.wlr_keyboard, keymap);
     }
 
+    /// # Safety
+    /// The group's seat's `relay.input_method` must be null or live (its
+    /// destroy handler clears it).
     pub unsafe fn get_input_method_grab(&self, wm: &crate::window_manager::WindowManager) -> *mut ffi::wlr_input_method_keyboard_grab_v2 {
         if self.virtual_device {
             return std::ptr::null_mut();
@@ -284,6 +306,9 @@ impl KeyboardGroup {
         std::ptr::null_mut()
     }
 
+    /// # Safety
+    /// `server` must point to the live `Server`, and the group's
+    /// `config.keymap` be null or live.
     pub unsafe fn send_state(&mut self, server: *mut crate::server::Server) {
         let keymap = self.config.keymap;
         if keymap.is_null() {
@@ -291,14 +316,14 @@ impl KeyboardGroup {
         }
         let layout_index = self.wlr_keyboard.modifiers.group;
         let layout_name = ffi::xkb_keymap_layout_get_name(keymap, layout_index);
-        let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Caps Lock\0".as_ptr() as *const _);
+        let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, c"Caps Lock".as_ptr());
         let capslock = if caps_idx != ffi::XKB_MOD_INVALID {
             let caps_mask = 1 << caps_idx;
             (self.wlr_keyboard.modifiers.locked & caps_mask) != 0
         } else {
             false
         };
-        let num_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Num Lock\0".as_ptr() as *const _);
+        let num_idx = ffi::xkb_keymap_mod_get_index(keymap, c"Num Lock".as_ptr());
         let numlock = if num_idx != ffi::XKB_MOD_INVALID {
             let num_mask = 1 << num_idx;
             (self.wlr_keyboard.modifiers.locked & num_mask) != 0
@@ -309,7 +334,7 @@ impl KeyboardGroup {
         for xkb_kbd in (*server).xkb_config.keyboards() {
             let parent_dev = (*xkb_kbd).parent_device;
             let kbd = (*parent_dev).destroy_data as *mut crate::keyboard::Keyboard;
-            if !kbd.is_null() && (*kbd).group == self as *mut KeyboardGroup {
+            if !kbd.is_null() && std::ptr::eq((*kbd).group, self) {
                 (*xkb_kbd).send_state(layout_index, layout_name, capslock, numlock);
             }
         }

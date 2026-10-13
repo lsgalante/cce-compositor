@@ -97,13 +97,14 @@ impl Window {
         // latched, at the main window's size — before the rule that floats
         // it could match. So an untitled window of an app some title rule
         // names waits for its title; `map` calls back in here regardless.
-        if title_str.is_empty() && this.state != WindowState::Mapped {
-            if wm.mode_rules.iter().any(|r| {
+        if title_str.is_empty()
+            && this.state != WindowState::Mapped
+            && wm.mode_rules.iter().any(|r| {
                 r.title_pattern.is_some()
                     && (r.app_id_pattern == "*" || app_id_str.contains(&r.app_id_pattern))
-            }) {
-                return;
-            }
+            })
+        {
+            return;
         }
         // With the title in, a title rule outranks an entry that is not this
         // window's own: the rule is about this window, the entry about
@@ -112,11 +113,11 @@ impl Window {
         // sibling is, at the size it asks for.
         {
             let rule = wm
-                .get_rule_for_window(window_ref!(wm, id, ()))
+                .get_rule_for_window(window_ref!(wm, id))
                 .filter(|r| r.title_pattern.is_some())
                 .map(|r| r.over_sibling);
             if let Some(over_sibling) = rule {
-                let has_sibling = over_sibling && window_ref!(wm, id, ()).find_sibling(wm, &app_id_str).is_some();
+                let has_sibling = over_sibling && window_ref!(wm, id).find_sibling(wm, &app_id_str).is_some();
                 let own_entry = wm.has_titled_saved_entry(&app_id_str, &title_str);
                 if rule_skips_restore(has_sibling, own_entry) {
                     log::info!(
@@ -183,25 +184,21 @@ impl Window {
             // outlives it.
             unsafe {
                 match this.impl_type {
-                    WindowImpl::Toplevel(toplevel) => {
-                        if !toplevel.is_null() {
-                            (*toplevel).geometry.width = saved.width as i32;
-                            (*toplevel).geometry.height = saved.height as i32;
-                        }
+                    WindowImpl::Toplevel(toplevel) if !toplevel.is_null() => {
+                        (*toplevel).geometry.width = saved.width as i32;
+                        (*toplevel).geometry.height = saved.height as i32;
                     }
-                    WindowImpl::Xwayland(xwindow) => {
-                        // This pre-writes the wlroots mirror so `render_finish`
-                        // reports the saved size from the first frame; X itself
-                        // is still at the window's natural size until the
-                        // arrange pass configures it. That configure must not
-                        // be deduplicated against this mirror — see
-                        // `xwayland_window::needs_configure`, which also checks
-                        // the geometry the compositor has actually sent.
-                        if !xwindow.is_null() && !(*xwindow).xsurface().is_null() {
-                            let s = (*xwindow).xsurface().x11_scale();
-                            (*(*xwindow).xsurface().ptr()).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
-                            (*(*xwindow).xsurface().ptr()).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
-                        }
+                    // This pre-writes the wlroots mirror so `render_finish`
+                    // reports the saved size from the first frame; X itself
+                    // is still at the window's natural size until the
+                    // arrange pass configures it. That configure must not
+                    // be deduplicated against this mirror — see
+                    // `xwayland_window::needs_configure`, which also checks
+                    // the geometry the compositor has actually sent.
+                    WindowImpl::Xwayland(xwindow) if !xwindow.is_null() && !(*xwindow).xsurface().is_null() => {
+                        let s = (*xwindow).xsurface().x11_scale();
+                        (*(*xwindow).xsurface().ptr()).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
+                        (*(*xwindow).xsurface().ptr()).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
                     }
                     _ => {}
                 }
@@ -305,7 +302,7 @@ impl Window {
             let this = window_mut!(wm, id);
             if !from_session && this.tiling_mode == crate::tiling::TilingMode::Floating {
                 let (vx, vy) = (this.virtual_x, this.virtual_y);
-                let (nx, ny) = window_ref!(wm, id, ()).cascade_off_siblings(wm, &app_id_str, vx, vy);
+                let (nx, ny) = window_ref!(wm, id).cascade_off_siblings(wm, &app_id_str, vx, vy);
                 let this = window_mut!(wm, id);
                 if (nx, ny) != (this.virtual_x, this.virtual_y) {
                     log::info!(
@@ -344,7 +341,7 @@ impl Window {
         let me = self.id();
         let qualifies = |id: WindowId| {
             id != me
-                && wm.windows.get(id).map_or(false, |w| {
+                && wm.windows.get(id).is_some_and(|w| {
                     !w.closed
                         && !w.minimized
                         && !w.satellite
@@ -373,10 +370,10 @@ impl Window {
         let stores = stores!(wm);
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
-        let Some(sibling) = window_ref!(wm, id, ()).find_sibling(wm, &app_id) else {
+        let Some(sibling) = window_ref!(wm, id).find_sibling(wm, &app_id) else {
             return;
         };
-        let sibling = window_ref!(wm, sibling, ());
+        let sibling = window_ref!(wm, sibling);
         let (sw, sh) = sibling.mapped_size_hint();
         let sibling_at = (sibling.virtual_x, sibling.virtual_y);
         let sibling_title = sibling.get_title_string().unwrap_or_default();
@@ -705,11 +702,11 @@ impl Window {
         if Self::is_view_centered_modal(&app_id) {
             return true;
         }
-        wm.get_rule_for_window(self).map_or(false, |r| r.center)
+        wm.get_rule_for_window(self).is_some_and(|r| r.center)
     }
 
     pub(crate) fn try_center_on_view(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        if !window_ref!(wm, id, ()).wants_view_center(wm) {
+        if !window_ref!(wm, id).wants_view_center(wm) {
             return;
         }
 

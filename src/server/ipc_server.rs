@@ -343,7 +343,7 @@ mod framing_tests {
     fn an_overlong_command_is_refused_not_cut_short() {
         // The old reader ran the first 4096 bytes of this.
         let mut long = b"spawn ".to_vec();
-        long.extend(std::iter::repeat(b'x').take(MAX_COMMAND + 10));
+        long.extend(std::iter::repeat_n(b'x', MAX_COMMAND + 10));
         long.push(b'\n');
         let (mut client, mut server) = UnixStream::pair().unwrap();
         let writer = std::thread::spawn(move || {

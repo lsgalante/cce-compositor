@@ -42,6 +42,10 @@ pub struct Keyboard {
 unsafe impl crate::listener::Anchored for Keyboard {}
 
 impl Keyboard {
+    /// # Safety
+    /// `device` must be a live `InputDevice` (from `InputDevice::new`) whose
+    /// `wlr_device` is a keyboard and that has no keyboard yet: the device
+    /// takes the result over, and its destroy path frees it (`destroy_fn`).
     pub unsafe fn create(device: *mut InputDevice) -> *mut Self {
         let wlr_keyboard = ffi::wlr_keyboard_from_input_device((*device).wlr_device);
         
@@ -95,10 +99,8 @@ impl Keyboard {
             (*keyboard).keymap_listener.connect(keymap_signal, handle_keymap);
         }
 
-        if !virtual_device && should_set_keymap() {
-            if !keymap.is_null() {
-                ffi::wlr_keyboard_set_keymap(wlr_keyboard, keymap);
-            }
+        if !virtual_device && should_set_keymap() && !keymap.is_null() {
+            ffi::wlr_keyboard_set_keymap(wlr_keyboard, keymap);
         }
 
         (*device).destroy_fn = Some(destroy_callback);
@@ -107,6 +109,10 @@ impl Keyboard {
         keyboard
     }
 
+    /// # Safety
+    /// `keyboard` must be one [`create`](Self::create) returned, not yet
+    /// destroyed, whose device is still live (this runs as its `destroy_fn`).
+    /// Still in a group, no reference to a seat may be live (`KeyboardGroup::unref`).
     pub unsafe fn destroy(keyboard: *mut Self) {
         (*keyboard).key_listener.disconnect();
         (*keyboard).modifiers_listener.disconnect();
@@ -136,6 +142,11 @@ impl Keyboard {
 
     /// Put the keyboard in a group of `seat` (its device's seat); nothing
     /// without one.
+    ///
+    /// # Safety
+    /// `self` is a keyboard [`create`](Self::create) made, whose device is
+    /// live; the group keeps its address until it leaves. `seat` is null or
+    /// a live `Seat` the call may borrow mutably.
     pub unsafe fn set_group(&mut self, seat: *mut Seat) {
         assert!(self.group.is_null());
         if seat.is_null() {
@@ -170,6 +181,9 @@ impl Keyboard {
         }
     }
 
+    /// # Safety
+    /// As [`set_group`](Self::set_group), and no reference to any seat may be
+    /// live: leaving the old group may free it (`KeyboardGroup::unref`).
     pub unsafe fn set_repeat_info(&mut self, seat: *mut Seat, rate: i32, delay: i32) {
         assert!(!(*self.device).virtual_device);
         self.config.repeat_rate = rate;
@@ -183,6 +197,9 @@ impl Keyboard {
         self.set_group(seat);
     }
 
+    /// # Safety
+    /// As [`set_repeat_info`](Self::set_repeat_info); `keymap` is null or a
+    /// live `xkb_keymap` (the keyboard takes its own reference).
     pub unsafe fn set_keymap(&mut self, seat: *mut Seat, keymap: *mut ffi::xkb_keymap) {
         assert!(!(*self.device).virtual_device);
         if should_set_keymap() {
@@ -215,7 +232,8 @@ fn should_set_keymap() -> bool {
 }
 
 pub fn keysym_is_modifier(sym: u32) -> bool {
-    match sym {
+    matches!(
+        sym,
         ffi::XKB_KEY_Shift_L |
         ffi::XKB_KEY_Shift_R |
         ffi::XKB_KEY_Control_L |
@@ -252,9 +270,8 @@ pub fn keysym_is_modifier(sym: u32) -> bool {
         ffi::XKB_KEY_ISO_First_Group |
         ffi::XKB_KEY_ISO_First_Group_Lock |
         ffi::XKB_KEY_ISO_Last_Group |
-        ffi::XKB_KEY_ISO_Last_Group_Lock => true,
-        _ => false,
-    }
+        ffi::XKB_KEY_ISO_Last_Group_Lock
+    )
 }
 
 unsafe extern "C" fn handle_key(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

@@ -204,6 +204,9 @@ pub fn in_output_change_grace() -> bool {
 /// drawn in the logical world with the window it was twice the desktop's
 /// cursor. Every X11 cursor is a physical-pixel bitmap, exempt window or
 /// not.
+///
+/// # Safety
+/// `surface` must be null or a live `wlr_surface`.
 pub unsafe fn x11_scale_for_surface(surface: *mut ffi::wlr_surface) -> f32 {
     if surface.is_null() {
         return 1.0;
@@ -333,6 +336,11 @@ impl XwaylandWindow {
         &self.xsurface
     }
 
+    /// # Safety
+    /// `xsurface` must be a live X11 surface no object of ours holds (a new
+    /// one, or one whose override-redirect object was just torn down): its
+    /// `data` is taken, and it is mapped here while `wm` is borrowed, which
+    /// is sound only with none of our listeners on it.
     pub unsafe fn create(
     wm: &mut crate::window_manager::WindowManager,
         xsurface: *mut ffi::wlr_xwayland_surface,
@@ -515,7 +523,7 @@ impl XwaylandWindow {
         let wine = is_wine_exe(&exe.to_string_lossy())
             || crate::window_manager::proc_args(pid)
                 .first()
-                .map_or(false, |argv0| crate::window_manager::is_windows_path(argv0));
+                .is_some_and(|argv0| crate::window_manager::is_windows_path(argv0));
         self.wine_process = Some(wine);
         wine
     }
@@ -637,9 +645,9 @@ impl XwaylandWindow {
             return false;
         }
         let no_title = self.xsurface().decorations()
-            & ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_TITLE as u32
+            & ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_TITLE
             != 0;
-        no_title && self.is_wine_process() && self.motif_hints().map_or(false, |h| motif_allows_maximize(&h))
+        no_title && self.is_wine_process() && self.motif_hints().is_some_and(|h| motif_allows_maximize(&h))
     }
 
     /// The window's `_MOTIF_WM_HINTS`, read over the XWM's own connection.
@@ -655,7 +663,7 @@ impl XwaylandWindow {
         const ECHO_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
         self.wine_max_unconfirmed
             && window.tiling_mode == crate::tiling::TilingMode::Tiled
-            && self.last_configure.map_or(false, |t| t.elapsed() < ECHO_WINDOW)
+            && self.last_configure.is_some_and(|t| t.elapsed() < ECHO_WINDOW)
     }
 
     /// The geometry wlroots currently reports for the X window.
@@ -840,7 +848,7 @@ fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowManager,
     let s = xsurface.x11_scale();
     let log_x = from_x11(asked.x as i32, s);
     let log_y = from_x11(asked.y as i32, s);
-    let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
+    let (vx, vy) = window_ref!(wm, id).screen_to_virtual(wm, log_x, log_y);
     let this = window_mut!(wm, id);
     this.virtual_x = vx;
     this.virtual_y = vy;
@@ -869,7 +877,7 @@ fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, id: Wind
     let (x11_x, x11_y) = (xsurface.x(), xsurface.y());
     let log_x = from_x11(x11_x as i32, s);
     let log_y = from_x11(x11_y as i32, s);
-    let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
+    let (vx, vy) = window_ref!(wm, id).screen_to_virtual(wm, log_x, log_y);
     let this = window_mut!(wm, id);
     this.virtual_x = vx;
     this.virtual_y = vy;
@@ -983,7 +991,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     // up. It gets the parented treatment: position and size granted, the
     // virtual origin moved with it. Not while the compositor has it
     // fullscreen or tiled: then the size is the compositor's (below).
-    let exempt_self_placed = !has_parent && !is_fullscreen && !is_tiled && window_is_hidpi_exempt(window_ref!(wm, id, ()));
+    let exempt_self_placed = !has_parent && !is_fullscreen && !is_tiled && window_is_hidpi_exempt(window_ref!(wm, id));
     // A shy helper window (`Window::is_shy`) is placed by its app, which
     // moves it to track its main window: position and size granted.
     let this = window_mut!(wm, id);
@@ -1059,7 +1067,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         // is a runaway: Houdini's Edit Theme dialog walked 270px left across
         // one tab switch, re-requesting 15 times in a second and never
         // converging on a size either.
-        let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
+        let (vx, vy) = window_ref!(wm, id).screen_to_virtual(wm, log_x, log_y);
         let this = window_mut!(wm, id);
         this.virtual_x = vx;
         this.virtual_y = vy;
@@ -1262,7 +1270,7 @@ unsafe extern "C" fn handle_set_decorations(listener: *mut ffi::wl_listener, _da
     let this = window_mut!(wm, id);
     let prefers_csd = ((*xwindow).xsurface().decorations()
         & (ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_BORDER
-            | ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_TITLE) as u32)
+            | ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_TITLE))
         != 0;
 
     let hint = if prefers_csd {
@@ -1342,12 +1350,12 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
     // set it clears it.
     if !fullscreen
         && this.is_fullscreen()
-        && window_is_hidpi_exempt(window_ref!(wm, id, ()))
+        && window_is_hidpi_exempt(window_ref!(wm, id))
     {
         log::info!("XWayland fullscreen request: ignored — the window is hidpi-exempt and fullscreen by the compositor");
         return;
     }
-    if (*xwindow).absorbs_wine_echo(window_ref!(wm, id, ())) {
+    if (*xwindow).absorbs_wine_echo(window_ref!(wm, id)) {
         log::info!("XWayland fullscreen request: absorbed — Wine's echo of a tiled window's maximized state");
         return;
     }

@@ -5,6 +5,8 @@
 use super::*;
 
 impl WindowManager {
+    /// # Safety
+    /// Every device registered in `input` has a live `wlr_device`.
     pub unsafe fn apply_input_rules(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
         for device in input.devices() {
@@ -22,6 +24,9 @@ impl WindowManager {
         }
     }
 
+    /// # Safety
+    /// As [`apply_key_repeat`](Self::apply_key_repeat); a device's libinput
+    /// handle is live as long as its `wlr_device`.
     pub unsafe fn apply_input_config(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
         for device in input.devices() {
@@ -35,6 +40,10 @@ impl WindowManager {
     /// Push `input_config`'s repeat rate/delay to every hardware keyboard and
     /// return how many there are. A keyboard regroups on a change (groups are
     /// keyed by repeat info), so one already matching is left alone.
+    ///
+    /// # Safety
+    /// Every device registered in `input` has a live `wlr_device`, and a
+    /// hardware keyboard's `destroy_data` is null or its live `Keyboard`.
     pub unsafe fn apply_key_repeat(&mut self, input: &mut crate::input_manager::InputManager) -> usize {
         crate::wm_scope!(mut);
         let (rate, delay) = crate::shared::layout().input_config.repeat_info();

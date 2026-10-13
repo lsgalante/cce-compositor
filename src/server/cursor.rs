@@ -353,6 +353,11 @@ impl Cursor {
         &self.xcursor_manager
     }
 
+    /// # Safety
+    /// `seat` is the live seat holding this cursor, already in its store
+    /// (`id` and `wlr_seat` set), and `output_layout` is live. The cursor
+    /// holds that `wlr_seat` until [`deinit`](Self::deinit), which must run
+    /// before `wlr_seat_destroy` (as `Seat::destroy` does).
     pub unsafe fn init(
         &mut self,
         seat: *mut Seat,
@@ -514,7 +519,7 @@ impl Cursor {
 
     pub fn update_state(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         crate::pointer_constraint::with_held(wm, sid, |c, wm| c.update_state(wm));
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.update_hovered();
         Cursor::passthrough(wm, sid, crate::util::msec_timestamp());
     }
@@ -530,7 +535,7 @@ impl Cursor {
     /// focus itself; an implicit client grab is already handled inside
     /// `passthrough`.
     pub fn refresh_after_scene_change(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
-        if seat_mut!(wm, sid, ()).op.is_some() {
+        if seat_mut!(wm, sid).op.is_some() {
             return;
         }
         Cursor::update_state(wm, sid);
@@ -565,7 +570,7 @@ impl Cursor {
         }
         // SAFETY: both are this cursor's, and `deinit` destroys the
         // wlr_cursor before the manager.
-        unsafe { self.wlr_cursor().set_xcursor(&self.xcursor_manager(), name) };
+        unsafe { self.wlr_cursor().set_xcursor(self.xcursor_manager(), name) };
         // `wlr_cursor_set_xcursor` paints frame 0 and stops there; if this
         // cursor has more frames, take over from here.
         self.start_xcursor_animation(name);
@@ -696,7 +701,7 @@ impl Cursor {
 
     pub fn op_start_pointer(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         crate::pointer_constraint::with_held(wm, sid, |c, wm| c.deactivate(wm));
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
 
         log::debug!("entering cursor mode op");
         this.wlr_seat().pointer_notify_clear_focus();
@@ -706,7 +711,7 @@ impl Cursor {
         // happens here for whatever the op grabbed: a Floating window, or a
         // Tiled one, which can be stacked on another and is resized in place.
         // (A window un-tiled by a move is raised again in `op_update`.)
-        let grabbed = seat_mut!(wm, sid, ()).op.as_ref().and_then(|op| op.window).filter(|&id| {
+        let grabbed = seat_mut!(wm, sid).op.as_ref().and_then(|op| op.window).filter(|&id| {
             wm.windows.get(id).is_some_and(|w| {
                 !w.closed
                     && !w.is_status_bar()
@@ -720,7 +725,7 @@ impl Cursor {
     }
 
     pub fn op_end_pointer(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         if this.pressed.is_empty() {
             log::debug!("entering cursor mode passthrough");
             Cursor::update_state(wm, sid);
@@ -734,7 +739,7 @@ impl Cursor {
     /// and repaints their borders. The stored id may name a closed window,
     /// which looks up as `None`.
     pub fn set_border_hover(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, target_id: Option<crate::window::WindowId>, element: Option<crate::window::BorderElement>) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         if this.hovered_border_window == target_id && this.hovered_border_element == element {
             return;
         }
@@ -758,7 +763,7 @@ impl Cursor {
     /// ring eases off the old window and onto the new one through the same
     /// border fade a hover swap uses, so a change arms that timer.
     pub fn set_adjust_hover(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, target: Option<crate::window::WindowId>) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         if this.adjust_hover == target {
             return;
         }
@@ -775,7 +780,7 @@ impl Cursor {
         // edge) must not take it, or a confined pointer pressed against the
         // edge loses the client.
         let constrained = crate::pointer_constraint::with_held(wm, sid, |c, _| c.is_active()).unwrap_or(false);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let lx = this.x();
         let ly = this.y();
 
@@ -791,8 +796,8 @@ impl Cursor {
         // the pointer onto whatever it is dragged over. Holding focus on the
         // source here means the drag target never changes, so no drop is ever
         // delivered anywhere — the source keeps receiving motion instead.
-        if !this.notified_pressed.is_empty() && seat_mut!(wm, sid, ()).drag == crate::seat::DragState::None {
-            let this = cursor_mut!(wm, sid, ());
+        if !this.notified_pressed.is_empty() && seat_mut!(wm, sid).drag == crate::seat::DragState::None {
+            let this = cursor_mut!(wm, sid);
             let focused =
                 this.wlr_seat().pointer_focused_surface();
             if !focused.is_null() {
@@ -816,13 +821,13 @@ impl Cursor {
                     // values must not map points for its replacement.
                     if let Some((gsurf, ..)) = grid_node_info(wm) {
                         if gsurf == focused {
-                            let this = cursor_mut!(wm, sid, ());
+                            let this = cursor_mut!(wm, sid);
                             this.wlr_seat().pointer_notify_motion(time_msec, (lx - nx) / scale, (ly - ny) / scale);
                             return;
                         }
                     }
                 }
-                let this = cursor_mut!(wm, sid, ());
+                let this = cursor_mut!(wm, sid);
                 this.wlr_seat().pointer_notify_motion(time_msec, (lx - this.grab_origin.0) * this.grab_scale, (ly - this.grab_origin.1) * this.grab_scale);
                 return;
             }
@@ -834,7 +839,7 @@ impl Cursor {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
                     crate::cursor::Cursor::set_border_hover(wm, sid, None, None);
                     Cursor::set_adjust_hover(wm, sid, None);
-                    let this = cursor_mut!(wm, sid, ());
+                    let this = cursor_mut!(wm, sid);
                     this.clear_focus();
                     return;
                 }
@@ -842,7 +847,7 @@ impl Cursor {
                 if matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
                     crate::cursor::Cursor::set_border_hover(wm, sid, None, None);
                     Cursor::set_adjust_hover(wm, sid, None);
-                    let this = cursor_mut!(wm, sid, ());
+                    let this = cursor_mut!(wm, sid);
                     this.clear_focus();
                     return;
                 }
@@ -891,7 +896,7 @@ impl Cursor {
                         match zone {
                             BorderZone::Resize(edges) => {
                                 crate::cursor::Cursor::set_border_hover(wm, sid, Some(window_id), Some(border_element_for_edges(edges)));
-                                let this = cursor_mut!(wm, sid, ());
+                                let this = cursor_mut!(wm, sid);
                                 this.wlr_seat().pointer_notify_clear_focus();
                                 let cursor_name = get_resize_cursor_name(edges);
                                 this.set_xcursor(cursor_name);
@@ -899,14 +904,14 @@ impl Cursor {
                             }
                             BorderZone::Move => {
                                 crate::cursor::Cursor::set_border_hover(wm, sid, Some(window_id), Some(crate::window::BorderElement::Top));
-                                let this = cursor_mut!(wm, sid, ());
+                                let this = cursor_mut!(wm, sid);
                                 this.wlr_seat().pointer_notify_clear_focus();
                                 this.set_xcursor(c"grab");
                                 return;
                             }
                             BorderZone::Button(elem) => {
                                 crate::cursor::Cursor::set_border_hover(wm, sid, Some(window_id), Some(elem));
-                                let this = cursor_mut!(wm, sid, ());
+                                let this = cursor_mut!(wm, sid);
                                 this.wlr_seat().pointer_notify_clear_focus();
                                 this.set_xcursor(c"pointer");
                                 return;
@@ -967,20 +972,20 @@ impl Cursor {
                 if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
                     && hovered.is_some()
                     && !wm.seats.get(sid).is_some_and(|s| s.focus_is_chrome(wm))
-                    && hovered.map(crate::seat::Focus::Window) != Some(seat_mut!(wm, sid, ()).focused)
+                    && hovered.map(crate::seat::Focus::Window) != Some(seat_mut!(wm, sid).focused)
                 {
-                    let prev = seat_mut!(wm, sid, ()).suppress_focus_pan;
-                    seat_mut!(wm, sid, ()).suppress_focus_pan = true;
+                    let prev = seat_mut!(wm, sid).suppress_focus_pan;
+                    seat_mut!(wm, sid).suppress_focus_pan = true;
                     crate::seat::Seat::focus_window(wm, sid, hovered);
-                    seat_mut!(wm, sid, ()).suppress_focus_pan = prev;
+                    seat_mut!(wm, sid).suppress_focus_pan = prev;
                 }
-                let this = cursor_mut!(wm, sid, ());
+                let this = cursor_mut!(wm, sid);
                 this.clear_focus();
                 return;
             }
 
             if !result.surface.is_null() {
-                let this = cursor_mut!(wm, sid, ());
+                let this = cursor_mut!(wm, sid);
                 // SAFETY: the surface the hit test above just returned: what
                 // ran since (hover and adjust-target bookkeeping, timer arms)
                 // dispatches no client, so nothing has destroyed it.
@@ -1000,10 +1005,10 @@ impl Cursor {
         // every other purpose (see `Scene::at`) — only the drag resolves onto
         // it, and only while the pointer is over the background, so clicks,
         // hover and the overview background-exit are untouched.
-        if seat_mut!(wm, sid, ()).drag != crate::seat::DragState::None {
+        if seat_mut!(wm, sid).drag != crate::seat::DragState::None {
             if let Some((surface, sx, sy)) = grid_surface_at(wm, lx, ly) {
                 log::debug!("[drag] focus -> grid at ({lx:.0}, {ly:.0})");
-                let this = cursor_mut!(wm, sid, ());
+                let this = cursor_mut!(wm, sid);
                 // SAFETY: `grid_surface_at` just returned the mapped grid
                 // window's root surface, live as long as the window.
                 unsafe { this.wlr_seat().pointer_notify_enter(surface, sx, sy) };
@@ -1014,7 +1019,7 @@ impl Cursor {
 
         crate::cursor::Cursor::set_border_hover(wm, sid, None, None);
         Cursor::set_adjust_hover(wm, sid, None);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.clear_focus();
     }
 
@@ -1064,7 +1069,7 @@ impl Cursor {
     /// layout pixels — `wlr_cursor_warp_absolute` is 0..1-normalized, which is the
     /// bug the old `pointer-move-to` had.
     pub fn inject_motion_to(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, x: f64, y: f64, sys: &mut crate::ctx::Sys) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.unhide_after_touch();
         Cursor::warp_to(wm, sid, x, y, sys);
     }
@@ -1073,13 +1078,13 @@ impl Cursor {
     /// emulated pointer of a touch (`TouchRoute::Pointer`) moves this way.
     pub(crate) fn warp_to(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, x: f64, y: f64, sys: &mut crate::ctx::Sys) {
         crate::seat::Seat::handle_activity(wm, sid, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_cursor().warp(x, y);
         this.update_hovered();
         this.update_drag_icons();
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         if seat.op.is_some() {
-            let this = cursor_mut!(wm, sid, ());
+            let this = cursor_mut!(wm, sid);
             let lx = this.wlr_cursor().x() as i32;
             let ly = this.wlr_cursor().y() as i32;
             crate::seat::Seat::op_update(wm, sid, lx, ly);
@@ -1088,7 +1093,7 @@ impl Cursor {
         Cursor::passthrough(wm, sid, crate::util::msec_timestamp());
         // Real devices terminate every motion batch with a frame; sctk-based clients
         // queue pointer events until they see one.
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 
@@ -1102,7 +1107,7 @@ impl Cursor {
             unaccel_dy: dy,
         };
         on_motion(wm, sid, &ev, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 
@@ -1119,7 +1124,7 @@ impl Cursor {
             state,
         };
         on_button(wm, sid, &ev, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 
@@ -1154,11 +1159,11 @@ impl Cursor {
             };
             let device = crate::cursor::axis::AxisDevice {
                 scroll_factor: 1.0,
-                natural: cursor_mut!(wm, sid, ()).inject_natural,
+                natural: cursor_mut!(wm, sid).inject_natural,
             };
             on_axis(wm, sid, &ev, device, sys);
         }
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         // Every libinput axis event is followed by a frame; clients
         // (Xwayland among them) deliver only on the frame, and wlroots
         // asserts if a later axis event changes source within one. One
@@ -1186,14 +1191,14 @@ impl Cursor {
             };
             let device = crate::cursor::axis::AxisDevice {
                 scroll_factor: 1.0,
-                natural: cursor_mut!(wm, sid, ()).inject_natural,
+                natural: cursor_mut!(wm, sid).inject_natural,
             };
             on_axis(wm, sid, &ev, device, sys);
         }
         // Every libinput axis event is followed by a frame; clients
         // (Xwayland among them) deliver only on the frame, and wlroots
         // asserts if a later axis event changes source within one.
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 
@@ -1219,7 +1224,7 @@ impl Cursor {
                 on_pinch_end(wm, sid, &ev, sys);
             }
         }
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 
@@ -1227,7 +1232,7 @@ impl Cursor {
     /// begin <fingers> | update <dx> <dy> | end`): what lets a shadow hold
     /// a swipe short of its threshold and read the camera's peek back.
     pub fn inject_swipe_stage(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, stage: &str, fingers: u32, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let time = crate::util::msec_timestamp();
         match stage {
             "begin" => {
@@ -1245,7 +1250,7 @@ impl Cursor {
                 on_swipe_end(wm, sid, &ev, sys);
             }
         }
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 
@@ -1261,7 +1266,7 @@ impl Cursor {
             fingers,
         };
         on_swipe_begin(wm, sid, &begin, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
         let steps = steps.max(1);
         for i in 1..=steps {
@@ -1273,7 +1278,7 @@ impl Cursor {
                 dy: dy / steps as f64,
             };
             on_swipe_update(wm, sid, &update, sys);
-            let this = cursor_mut!(wm, sid, ());
+            let this = cursor_mut!(wm, sid);
             this.wlr_seat().pointer_notify_frame();
         }
         let end = ffi::wlr_pointer_swipe_end_event {
@@ -1282,7 +1287,7 @@ impl Cursor {
             cancelled: false,
         };
         on_swipe_end(wm, sid, &end, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 
@@ -1294,7 +1299,7 @@ impl Cursor {
             fingers: 2,
         };
         on_pinch_begin(wm, sid, &begin, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
         let steps = steps.max(1);
         for i in 1..=steps {
@@ -1309,7 +1314,7 @@ impl Cursor {
                 rotation: rotation * t,
             };
             on_pinch_update(wm, sid, &update, sys);
-            let this = cursor_mut!(wm, sid, ());
+            let this = cursor_mut!(wm, sid);
             this.wlr_seat().pointer_notify_frame();
         }
         let end = ffi::wlr_pointer_pinch_end_event {
@@ -1318,7 +1323,7 @@ impl Cursor {
             cancelled: false,
         };
         on_pinch_end(wm, sid, &end, sys);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 }
@@ -1341,13 +1346,13 @@ pub(crate) fn on_motion(wm: &mut crate::window_manager::WindowManager, sid: crat
     crate::seat::Seat::handle_activity(wm, sid, sys);
     // Real pointer motion ends an emulated view drag: the client must not
     // see the synthetic drag position and the true one interleaved.
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if cursor.view_drag.is_some() {
         crate::cursor::Cursor::end_view_drag(wm, sid, "motion");
     }
     // Likewise the held Shift must not ride along to wherever the pointer
     // goes next.
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if cursor.hscroll_shift.is_some() {
         cursor.end_hscroll_shift("motion");
     }
@@ -1374,7 +1379,7 @@ pub(crate) fn on_motion(wm: &mut crate::window_manager::WindowManager, sid: crat
         // Locked: the pointer stays where it is.
         return;
     }
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
 
     // Real libinput motion collapses the compositor to ~3fps, while an injected
     // warp at the SAME event rate sustains ~58fps — so the cost is somewhere in
@@ -1392,9 +1397,9 @@ pub(crate) fn on_motion(wm: &mut crate::window_manager::WindowManager, sid: crat
     cursor.update_drag_icons();
     let t_drag = t_start.map(|s| s.elapsed().as_micros());
 
-    let seat = seat_mut!(wm, sid, ());
-    if (*seat).op.is_some() {
-        let cursor = cursor_mut!(wm, sid, ());
+    let seat = seat_mut!(wm, sid);
+    if seat.op.is_some() {
+        let cursor = cursor_mut!(wm, sid);
         let lx = cursor.wlr_cursor().x() as i32;
         let ly = cursor.wlr_cursor().y() as i32;
         crate::seat::Seat::op_update(wm, sid, lx, ly);
@@ -1429,12 +1434,12 @@ unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, dat
 
 /// `handle_motion_absolute` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
 pub(crate) unsafe fn on_motion_absolute(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
-    let Some(sptr) = wm.seats.ptr(sid) else { return () };
+    let Some(sptr) = wm.seats.ptr(sid) else { return };
     let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
     let _ = cptr;
     let event = data as *mut ffi::wlr_pointer_motion_absolute_event;
     crate::seat::Seat::handle_activity(wm, sid, sys);
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     cursor.unhide_after_touch();
     
     let wlr_device = if (*event).pointer.is_null() {
@@ -1462,7 +1467,7 @@ pub(crate) unsafe fn on_motion_absolute(wm: &mut crate::window_manager::WindowMa
     {
         return;
     }
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if dx != lx - cx || dy != ly - cy {
         // Confined: the clamped delta, not the device's position.
         cursor.wlr_cursor().move_by(dx, dy);
@@ -1472,9 +1477,9 @@ pub(crate) unsafe fn on_motion_absolute(wm: &mut crate::window_manager::WindowMa
     cursor.update_hovered();
     cursor.update_drag_icons();
 
-    let seat = seat_mut!(wm, sid, ());
-    if (*seat).op.is_some() {
-        let cursor = cursor_mut!(wm, sid, ());
+    let seat = seat_mut!(wm, sid);
+    if seat.op.is_some() {
+        let cursor = cursor_mut!(wm, sid);
         let lx = cursor.wlr_cursor().x() as i32;
         let ly = cursor.wlr_cursor().y() as i32;
         crate::seat::Seat::op_update(wm, sid, lx, ly);
@@ -1721,17 +1726,17 @@ unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: 
     (*seat).cursor.touch_frame();
 }
 
-/// A directional swipe bind fires once the accumulated travel (libinput
-/// units) passes `window_manager { swipe_threshold }`
-/// (`WindowManager::swipe_threshold`, default 70). Until then the camera
-/// *peeks*: it pans toward the swipe direction in proportion to the
-/// travel, up to `window_manager { swipe_peek }` screen px
-/// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
-/// eases back if the fingers lift short of it — so a hesitant
-/// three-finger swipe shows where it would go without going. Firing does
-/// not end the swipe: the travel restarts from zero, and each further
-/// `swipe_repeat_threshold` of travel (default four times the first) steps
-/// again — or back, on a reversal — until the fingers lift.
+// A directional swipe bind fires once the accumulated travel (libinput
+// units) passes `window_manager { swipe_threshold }`
+// (`WindowManager::swipe_threshold`, default 70). Until then the camera
+// *peeks*: it pans toward the swipe direction in proportion to the
+// travel, up to `window_manager { swipe_peek }` screen px
+// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
+// eases back if the fingers lift short of it — so a hesitant
+// three-finger swipe shows where it would go without going. Firing does
+// not end the swipe: the travel restarts from zero, and each further
+// `swipe_repeat_threshold` of travel (default four times the first) steps
+// again — or back, on a reversal — until the fingers lift.
 
 #[cfg(test)]
 mod tests {

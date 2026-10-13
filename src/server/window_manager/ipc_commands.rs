@@ -152,7 +152,7 @@ impl WindowManager {
                     // make it wait.
                     return "0\n".to_string();
                 }
-                return format!("{}\n", ms);
+                format!("{}\n", ms)
             }
             // Scene introspection: dump EVERY buffer in the whole scene —
             // layer, layout position, dest/natural size, owning client pid.
@@ -223,7 +223,7 @@ impl WindowManager {
                         )
                     };
                 }
-                return out;
+                out
             }
             // Scene introspection: dump every scene buffer of a window's
             // trees — position, dest size, natural buffer size,
@@ -288,7 +288,7 @@ impl WindowManager {
                         )
                     };
                 }
-                return out;
+                out
             }
             // WM introspection: one line per window with the fields the
             // arrange pass keys on (state, render-list linkage, status edge,
@@ -298,14 +298,14 @@ impl WindowManager {
             // manager reached it while one of its methods was running.
             // `debug-reentry reset` clears it.
             "debug-output" => {
-                return crate::output_hotplug::command(&self.outputs, &parts[1..]);
+                crate::output_hotplug::command(&self.outputs, &parts[1..])
             }
             "debug-reentry" => {
                 if parts.get(1) == Some(&"reset") {
                     crate::reentry::reset();
                     return "ok\n".to_string();
                 }
-                return crate::reentry::report();
+                crate::reentry::report()
             }
             "debug-windows" => {
                 let mut out = format!(
@@ -344,7 +344,7 @@ impl WindowManager {
                         cfg,
                     ));
                 }
-                return out;
+                out
             }
             "status-hide-mode" => {
                 let enable = if parts.len() >= 2 {
@@ -358,7 +358,7 @@ impl WindowManager {
                 };
                 self.status_hide_mode = enable;
                 crate::shared::pending().dirty_windowing();
-                return format!("ok {}\n", enable);
+                format!("ok {}\n", enable)
             }
             "adjust-position-mode" => {
                 if parts.get(1).copied() == Some("query") {
@@ -378,7 +378,7 @@ impl WindowManager {
                 // written here until 2026-10-02; nothing read it.
                 self.adjust_position_mode = enable;
                 crate::shared::pending().dirty_windowing();
-                return format!("ok {}\n", enable);
+                format!("ok {}\n", enable)
             }
             // The desktop grid reporting its images: `grid-items
             // <id>:<x>:<y>:<w>:<h> ...` in virtual units, the whole list on
@@ -387,7 +387,7 @@ impl WindowManager {
                 let items = crate::selection::parse_desktop_items(&parts[1..]);
                 let n = items.len();
                 self.set_desktop_items(items);
-                return format!("ok {}\n", n);
+                format!("ok {}\n", n)
             }
             // The overview drag-selection: the selected window ids and the
             // selected desktop images' ids, each on one line (`-` for
@@ -755,7 +755,7 @@ impl WindowManager {
                             continue;
                         }
                     }
-                    let id_match = query.parse::<u64>().map_or(false, |id| w.id().ipc() == id);
+                    let id_match = query.parse::<u64>().is_ok_and(|id| w.id().ipc() == id);
                     let aid = w.get_app_id_string().unwrap_or_default().to_lowercase();
                     let score = if id_match || aid == query {
                         100
@@ -1459,8 +1459,8 @@ impl WindowManager {
                 // `natural` marks the swipe as coming from a natural-scrolling
                 // touchpad: the deltas are given as libinput would deliver
                 // them (already sign-flipped), and the view drag undoes that.
-                let finger = parts.iter().any(|p| *p == "finger");
-                let natural = parts.iter().any(|p| *p == "natural");
+                let finger = parts.contains(&"finger");
+                let natural = parts.contains(&"natural");
                 let dy = parse_finite(parts[1]);
                 let dx = parts.get(2).filter(|p| **p != "finger" && **p != "natural").map(|v| parse_finite(v)).unwrap_or(Ok(0.0));
                 if let (Ok(dy), Ok(dx)) = (dy, dx) {

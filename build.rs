@@ -101,7 +101,7 @@ fn main() {
         clean_xml(path, &temp_xml);
         let header_name = name.replace(".xml", "-protocol.h");
         let status = std::process::Command::new("wayland-scanner")
-            .args(&[
+            .args([
                 "server-header",
                 temp_xml.to_str().unwrap(),
                 out_dir.join(&header_name).to_str().unwrap(),
@@ -134,7 +134,7 @@ fn main() {
 
         let header_name = name.replace(".xml", "-protocol.h");
         let status_h = std::process::Command::new("wayland-scanner")
-            .args(&[
+            .args([
                 "server-header",
                 temp_xml.to_str().unwrap(),
                 out_dir.join(&header_name).to_str().unwrap(),
@@ -146,7 +146,7 @@ fn main() {
         let code_name = name.replace(".xml", "-protocol.c");
         let code_path = out_dir.join(&code_name);
         let status_c = std::process::Command::new("wayland-scanner")
-            .args(&[
+            .args([
                 "private-code",
                 temp_xml.to_str().unwrap(),
                 code_path.to_str().unwrap(),

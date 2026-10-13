@@ -4,6 +4,7 @@
 //! extents. Split out of window.rs on 2026-10-10.
 
 use super::*;
+use std::f32::consts::FRAC_1_SQRT_2;
 
 impl Window {
     /// The root plate / content-clip corner radius in logical px, before span
@@ -142,7 +143,7 @@ impl Window {
         // from it. Normalized here so the shader can take it as-is.
         let (lx, ly) = (layout.bevel_light_x, layout.bevel_light_y);
         let len = (lx * lx + ly * ly).sqrt();
-        let (lx, ly) = if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) };
+        let (lx, ly) = if len > 1e-6 { (lx / len, ly / len) } else { (-FRAC_1_SQRT_2, -FRAC_1_SQRT_2) };
 
         self.bevel.set_size(width, height);
         self.bevel.set_corner_radius(radius_dev);
@@ -187,7 +188,7 @@ impl Window {
             && layout.status_droplet.is_some()
             && width > 0
             && height > 0
-            && height <= layout.bar_height as i32;
+            && height <= layout.bar_height;
         if !enabled {
             self.droplet.set_enabled(false);
             return;
@@ -344,17 +345,16 @@ impl Window {
         let target = if window_ref!(wm, id, false).adjust_dim_wanted(wm) { 1.0 } else { 0.0 };
         let this = window_mut!(wm, id, false);
         let delta = target - this.adjust_dim;
-        let moving;
-        if delta.abs() <= BORDER_FADE_EPSILON {
+        let moving = if delta.abs() <= BORDER_FADE_EPSILON {
             if this.adjust_dim == target {
                 return false;
             }
             this.adjust_dim = target;
-            moving = false;
+            false
         } else {
             this.adjust_dim += delta * border_fade_step();
-            moving = true;
-        }
+            true
+        };
         this.tree.set_opacity(this.effective_opacity());
         moving
     }

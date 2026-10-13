@@ -108,7 +108,7 @@ impl Listener {
         }
         // SAFETY: a non-null cell is ours until drop.
         let link = unsafe { &(*self.0).raw.link };
-        !link.prev.is_null() && !link.next.is_null() && link.prev as *const ffi::wl_list != link as *const ffi::wl_list
+        !link.prev.is_null() && !link.next.is_null() && !std::ptr::eq(link.prev, link)
     }
 
     /// Whether `listener` — what a signal handed a callback — is this

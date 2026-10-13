@@ -19,6 +19,9 @@ pub struct TextInput {
 unsafe impl crate::listener::Anchored for TextInput {}
 
 impl TextInput {
+    /// # Safety
+    /// `wlr_text_input` must be a live text input no object of ours holds,
+    /// as the manager's `new_text_input` signal hands one.
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, wlr_text_input: *mut ffi::wlr_text_input_v3) -> Result<(), &'static str> {
         let Some(sid) = wm.seats.find((*wlr_text_input).seat) else { return Err("Seat is gone") };
         let Some(seat) = wm.seats.get_mut(sid) else { return Err("Seat is gone") };

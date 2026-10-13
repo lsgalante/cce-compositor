@@ -38,6 +38,10 @@ impl XwaylandOverrideRedirect {
         &self.xsurface
     }
 
+    /// # Safety
+    /// `xsurface` must be a live X11 surface no object of ours holds (a new
+    /// one, or one whose window was just torn down): it is mapped here while
+    /// `wm` is borrowed, which is sound only with none of our listeners on it.
     pub unsafe fn create(
         wm: &mut crate::window_manager::WindowManager,
         xsurface: *mut ffi::wlr_xwayland_surface,

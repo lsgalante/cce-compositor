@@ -216,14 +216,14 @@ unsafe fn read_texture(texture: *mut ffi::wlr_texture, w: i32, h: i32) -> Option
 pub(crate) fn to_rgba(mut pixels: Vec<u8>, format: u32) -> Option<Vec<u8>> {
     match format {
         DRM_FORMAT_XRGB8888 | DRM_FORMAT_ARGB8888 => {
-            for px in pixels.chunks_exact_mut(4) {
+            for px in pixels.as_chunks_mut::<4>().0 {
                 px.swap(0, 2);
                 px[3] = 255;
             }
             Some(pixels)
         }
         DRM_FORMAT_XBGR8888 | DRM_FORMAT_ABGR8888 => {
-            for px in pixels.chunks_exact_mut(4) {
+            for px in pixels.as_chunks_mut::<4>().0 {
                 px[3] = 255;
             }
             Some(pixels)
@@ -245,7 +245,7 @@ pub(crate) fn to_rgba(mut pixels: Vec<u8>, format: u32) -> Option<Vec<u8>> {
 /// red and blue.)
 fn widen_24(pixels: &[u8], swap_rb: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(pixels.len() / 3 * 4);
-    for px in pixels.chunks_exact(3) {
+    for px in pixels.as_chunks::<3>().0 {
         if swap_rb {
             out.extend_from_slice(&[px[2], px[1], px[0], 255]);
         } else {
@@ -274,6 +274,9 @@ fn crop_rgba(pixels: &[u8], w: i32, h: i32, region: ffi::wlr_box) -> Option<(Vec
 
 /// Full-output / region capture: called from `Output::render_and_commit`
 /// after a successful commit, while the output state's buffer is still alive.
+///
+/// # Safety
+/// `renderer` and `buffer` are live for the length of the call.
 pub unsafe fn capture_state_buffer(
     renderer: *mut ffi::wlr_renderer,
     buffer: *mut ffi::wlr_buffer,
@@ -392,6 +395,7 @@ unsafe fn capture_surface_tree(root: *mut ffi::wlr_surface) -> Result<(Vec<u8>, 
 }
 
 /// Copy `src` (sw×sh RGBA) into `dst` (dw×dh RGBA) at (dx, dy), clipped.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn blit(dst: &mut [u8], dw: i32, dh: i32, src: &[u8], sw: i32, sh: i32, dx: i32, dy: i32) {
     for sy in 0..sh {
         let ty = dy + sy;
@@ -569,9 +573,10 @@ mod tests {
     fn blit_clips_at_edges() {
         let mut dst = vec![0u8; 2 * 2 * 4];
         let src: Vec<u8> = vec![9; 2 * 2 * 4];
+        let at = |x: usize, y: usize| (y * 2 + x) * 4;
         blit(&mut dst, 2, 2, &src, 2, 2, 1, 1); // only dst (1,1) covered
-        assert_eq!(dst[(1 * 2 + 1) * 4], 9);
-        assert_eq!(dst[0], 0);
+        assert_eq!(dst[at(1, 1)], 9);
+        assert_eq!(dst[at(0, 0)], 0);
         blit(&mut dst, 2, 2, &src, 2, 2, -5, -5); // fully clipped: no panic
     }
 }

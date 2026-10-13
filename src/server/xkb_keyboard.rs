@@ -26,6 +26,11 @@ pub struct XkbKeyboardObject {
 }
 
 impl XkbKeyboard {
+    /// # Safety
+    /// `server` must point to the live `Server`, and `parent_device` to the
+    /// live device that keeps the box. The box must be
+    /// [`deinit`](Self::deinit)ed before it is dropped: its address is
+    /// registered with the xkb config and handed to clients.
     pub unsafe fn init(server: *mut crate::server::Server, parent_device: *mut InputDevice,
     ) -> Box<Self> {
         let mut xkb_kbd = Box::new(Self {
@@ -50,6 +55,9 @@ impl XkbKeyboard {
         xkb_kbd
     }
 
+    /// # Safety
+    /// The box is dropped next, with no [`create_object`](Self::create_object)
+    /// in between: an object made after this would name a freed keyboard.
     pub unsafe fn deinit(&mut self) {
         for obj in self.objects.ptrs() {
             self.objects.remove(obj);
@@ -72,6 +80,11 @@ impl XkbKeyboard {
         }
     }
 
+    /// # Safety
+    /// `config_v1_resource` is a live `river_xkb_config_v1` resource; the
+    /// keyboard is between [`init`](Self::init) and [`deinit`](Self::deinit)
+    /// (which makes the new object inert), its `parent_device` live, and its
+    /// recorded layout name valid (as [`send_state`](Self::send_state)).
     pub unsafe fn create_object(&mut self, config_v1_resource: *mut ffi::wl_resource) {
         let client = ffi::wl_resource_get_client(config_v1_resource);
         let version = ffi::wl_resource_get_version(config_v1_resource);
@@ -141,6 +154,10 @@ impl XkbKeyboard {
         }
     }
 
+    /// # Safety
+    /// `layout_name` is null or a C string valid until the next
+    /// `send_state`: it is recorded (`sent.layout_name`), compared against
+    /// then, and re-sent by [`create_object`](Self::create_object).
     pub unsafe fn send_state(
         &mut self,
         layout_index: u32,
@@ -275,7 +292,7 @@ unsafe extern "C" fn xkb_keyboard_set_keymap(
         ffi::wl_resource_post_error(
             resource,
             ffi::river_xkb_keyboard_v1_error_RIVER_XKB_KEYBOARD_V1_ERROR_INVALID_KEYMAP,
-            b"client set invalid keymap\0".as_ptr() as *const _,
+            c"client set invalid keymap".as_ptr(),
         );
         return;
     }
@@ -379,7 +396,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_enable(
         return;
     }
 
-    let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Caps Lock\0".as_ptr() as *const _);
+    let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, c"Caps Lock".as_ptr());
     if caps_idx != ffi::XKB_MOD_INVALID {
         let mask = 1 << caps_idx;
         let mut modifiers = (*group).modifiers();
@@ -411,7 +428,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_disable(
         return;
     }
 
-    let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Caps Lock\0".as_ptr() as *const _);
+    let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, c"Caps Lock".as_ptr());
     if caps_idx != ffi::XKB_MOD_INVALID {
         let mask = 1 << caps_idx;
         let mut modifiers = (*group).modifiers();
@@ -443,7 +460,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_enable(
         return;
     }
 
-    let num_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Num Lock\0".as_ptr() as *const _);
+    let num_idx = ffi::xkb_keymap_mod_get_index(keymap, c"Num Lock".as_ptr());
     if num_idx != ffi::XKB_MOD_INVALID {
         let mask = 1 << num_idx;
         let mut modifiers = (*group).modifiers();
@@ -475,7 +492,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_disable(
         return;
     }
 
-    let num_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Num Lock\0".as_ptr() as *const _);
+    let num_idx = ffi::xkb_keymap_mod_get_index(keymap, c"Num Lock".as_ptr());
     if num_idx != ffi::XKB_MOD_INVALID {
         let mask = 1 << num_idx;
         let mut modifiers = (*group).modifiers();

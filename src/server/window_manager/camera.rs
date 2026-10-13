@@ -171,7 +171,7 @@ impl WindowManager {
         self.op_frame_pending = false;
         let grabbed: Vec<crate::window::WindowId> = self.seats.values().filter_map(|seat| seat.op.as_ref()?.window).collect();
         for id in grabbed {
-            if self.windows.get(id).map_or(false, |w| !w.closed) {
+            if self.windows.get(id).is_some_and(|w| !w.closed) {
                 Window::manage_finish(self, id);
             }
         }

@@ -4,6 +4,9 @@
 #![allow(dead_code)]
 #![allow(clippy::all)]
 #![allow(clippy::approx_constant)]
+// bindgen declares malloc, memcpy and the rest with `size_t` as u64, where
+// std expects usize: the same type on the 64-bit targets this builds for.
+#![allow(suspicious_runtime_symbol_definitions)]
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

@@ -38,6 +38,10 @@ struct Args {
     no_xwayland: bool,
 }
 
+/// # Safety
+/// Called only by the C log shim wlroots logs through
+/// (`wlroots_log_wrapper.c`): `ptr` must point to `len` readable bytes, and
+/// be non-null even when `len` is 0.
 #[no_mangle]
 pub unsafe extern "C" fn river_wlroots_log_callback(
     importance: ffi::wlr_log_importance,

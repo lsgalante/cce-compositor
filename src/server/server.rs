@@ -209,6 +209,10 @@ pub struct WlrXwayland {
 }
 
 // Wayland list manipulation utilities
+/// # Safety
+/// `list` is null or a node of a well-formed list (its `next` is live), and
+/// `elm` is null or writable and in no list: its links are overwritten
+/// without unlinking it.
 pub unsafe fn wl_list_insert(list: *mut WlList, elm: *mut WlList) {
     if list.is_null() {
         log::error!("wl_list_insert: list is null!");
@@ -231,6 +235,10 @@ pub unsafe fn wl_list_insert(list: *mut WlList, elm: *mut WlList) {
     (*list).next = elm;
 }
 
+/// # Safety
+/// `elm` must be non-null and writable; when its links are set (it is in a
+/// list), its neighbours must be live nodes of that list. With null links it
+/// is left alone.
 pub unsafe fn wl_list_remove(elm: *mut WlList) {
     // Upstream libwayland nulls the removed element's pointers; this port
     // originally left them stale, so a second remove — or any later
@@ -526,7 +534,7 @@ unsafe extern "C" fn xwayland_global_filter(
         return true;
     }
     let xserver = (*((*server).xwayland as *mut WlrXwayland)).server as *mut ffi::wlr_xwayland_server;
-    if xserver.is_null() || (*xserver).client.is_null() || (*xserver).client as *const ffi::wl_client != client {
+    if xserver.is_null() || (*xserver).client.is_null() || !std::ptr::eq((*xserver).client, client) {
         return true;
     }
     let iface = ffi::wl_global_get_interface(global) as *const WlInterfaceHead;
@@ -861,7 +869,7 @@ impl Server {
             // Setup subcomponents stubs
             let server_ptr = self as *mut Server;
             self.wm.init_with_server(server_ptr).map_err(|_| "Failed to init wm")?;
-            self.layer_shell.init(self.wl_server).map_err(|_| "Failed to init layer_shell")?;
+            self.layer_shell.init(self.wl_server)?;
             let mut scene = Scene::new();
             scene.init(self.linux_dmabuf, self.color_manager).map_err(|_| "Failed to init scene")?;
             crate::shared::shared().set_scene(scene);

@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
         let fired = AtomicUsize::new(0);
         let mut source = unsafe {
-            FdSource::add(event_loop, fds[0], ffi::WL_EVENT_READABLE as u32, read_byte, &fired as *const _ as *mut _)
+            FdSource::add(event_loop, fds[0], ffi::WL_EVENT_READABLE, read_byte, &fired as *const _ as *mut _)
         };
         assert!(source.is_set());
         unsafe { libc::write(fds[1], b"x".as_ptr() as *const _, 1) };

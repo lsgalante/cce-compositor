@@ -45,6 +45,9 @@ impl TabletTool {
         &self.xcursor_manager
     }
 
+    /// # Safety
+    /// As [`create`](Self::create), and `wlr_tool.data` must be null or the
+    /// `TabletTool` `create` made for it.
     pub unsafe fn get(
         wlr_seat: *mut ffi::wlr_seat,
         wlr_tool: *mut ffi::wlr_tablet_tool,
@@ -57,6 +60,9 @@ impl TabletTool {
         }
     }
 
+    /// # Safety
+    /// `wlr_seat` must be null or a live `wlr_seat`, `wlr_tool` a live
+    /// `wlr_tablet_tool`, and the tablet manager in `shared::handles()` set.
     pub unsafe fn create(
         wlr_seat: *mut ffi::wlr_seat,
         wlr_tool: *mut ffi::wlr_tablet_tool,
@@ -115,6 +121,9 @@ impl TabletTool {
         self.wlr_cursor().y()
     }
 
+    /// # Safety
+    /// `seat_client` must point to a live `wlr_seat_client`, and
+    /// `self.wp_tool` be as [`create`](Self::create) set it.
     pub unsafe fn allow_set_cursor(
         &self,
         seat_client: *mut ffi::wlr_seat_client,
@@ -148,6 +157,8 @@ impl TabletTool {
         true
     }
 
+    /// # Safety
+    /// `tablet` must point to a live `Tablet` whose `device` is live.
     pub unsafe fn attach(&mut self, tablet: *mut Tablet) {
         let dev = (*(*tablet).device).wlr_device;
         ffi::wlr_cursor_attach_input_device(self.wlr_cursor().ptr(), dev);
@@ -155,11 +166,17 @@ impl TabletTool {
         ffi::wlr_cursor_map_input_to_region(self.wlr_cursor().ptr(), dev, &mut (*(*tablet).device).config.map_to_rectangle as *mut _);
     }
 
+    /// # Safety
+    /// As [`attach`](Self::attach).
     pub unsafe fn detach(&mut self, tablet: *mut Tablet) {
         let dev = (*(*tablet).device).wlr_device;
         ffi::wlr_cursor_detach_input_device(self.wlr_cursor().ptr(), dev);
     }
 
+    /// # Safety
+    /// `tablet` must point to a live `Tablet` whose `device` is live, `event`
+    /// to the axis event being dispatched, and `self.wp_tool` be as
+    /// [`create`](Self::create) set it.
     pub unsafe fn axis(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet, event: *mut ffi::wlr_tablet_tool_axis_event) {
         self.attach(tablet);
 
@@ -241,6 +258,8 @@ impl TabletTool {
         self.detach(tablet);
     }
 
+    /// # Safety
+    /// As [`axis`](Self::axis), for a proximity event.
     pub unsafe fn proximity(
         &mut self,
         wm: &crate::window_manager::WindowManager,
@@ -260,7 +279,7 @@ impl TabletTool {
 
             // SAFETY: both are the tool's; `handle_destroy` destroys the
             // cursor before the manager.
-            self.wlr_cursor().set_xcursor(&self.xcursor_manager(), c"pencil");
+            self.wlr_cursor().set_xcursor(self.xcursor_manager(), c"pencil");
 
             self.passthrough(wm, tablet);
             self.detach(tablet);
@@ -270,6 +289,9 @@ impl TabletTool {
         }
     }
 
+    /// # Safety
+    /// `tablet` must point to a live `Tablet`, `event` to the tip event being
+    /// dispatched, and `self.wp_tool` be as [`create`](Self::create) set it.
     pub unsafe fn tip(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet, event: *mut ffi::wlr_tablet_tool_tip_event) {
         let state = (*event).state;
         let is_down = ffi::river_wlr_tablet_v2_tablet_tool_get_is_down(self.wp_tool);
@@ -300,6 +322,8 @@ impl TabletTool {
         }
     }
 
+    /// # Safety
+    /// As [`tip`](Self::tip), for a button event.
     pub unsafe fn button(
         &mut self,
         wm: &crate::window_manager::WindowManager,
@@ -314,6 +338,9 @@ impl TabletTool {
         self.maybe_exit_down(wm, tablet);
     }
 
+    /// # Safety
+    /// `tablet` must point to a live `Tablet`, and `self.wp_tool` be as
+    /// [`create`](Self::create) set it.
     pub unsafe fn maybe_exit_down(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet) {
         let is_down = ffi::river_wlr_tablet_v2_tablet_tool_get_is_down(self.wp_tool);
         let num_buttons = ffi::river_wlr_tablet_v2_tablet_tool_get_num_buttons(self.wp_tool);
@@ -324,6 +351,8 @@ impl TabletTool {
         self.passthrough(wm, tablet);
     }
 
+    /// # Safety
+    /// As [`maybe_exit_down`](Self::maybe_exit_down).
     pub unsafe fn passthrough(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet) {
         let lx = self.cursor_x();
         let ly = self.cursor_y();
@@ -342,7 +371,7 @@ impl TabletTool {
             }
         } else {
             // SAFETY: as in `proximity`.
-            self.wlr_cursor().set_xcursor(&self.xcursor_manager(), c"pencil");
+            self.wlr_cursor().set_xcursor(self.xcursor_manager(), c"pencil");
         }
 
         ffi::wlr_tablet_v2_tablet_tool_notify_proximity_out(self.wp_tool);
@@ -353,7 +382,7 @@ unsafe extern "C" fn handle_destroy(
     listener: *mut ffi::wl_listener,
     _data: *mut std::ffi::c_void,
 ) {
-    let tool_ptr = crate::listener_owner!(listener, TabletTool, destroy_listener) as *mut TabletTool;
+    let tool_ptr = crate::listener_owner!(listener, TabletTool, destroy_listener);
     let tool = &mut *tool_ptr;
 
     ffi::wlr_cursor_destroy(tool.wlr_cursor().take());

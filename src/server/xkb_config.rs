@@ -54,6 +54,10 @@ pub struct XkbConfigObject {
 }
 
 impl XkbConfig {
+    /// # Safety
+    /// `server` must point to the `Server`, its display up, and `self` must
+    /// not move or be dropped until [`deinit`](Self::deinit): the global hands
+    /// its address to every bind.
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         let context = ffi::xkb_context_new(ffi::xkb_context_flags_XKB_CONTEXT_NO_FLAGS);
         if context.is_null() {
@@ -93,6 +97,9 @@ impl XkbConfig {
         Ok(())
     }
 
+    /// # Safety
+    /// Before the display is destroyed, with `global`, `context` and
+    /// `default_keymap` null or as [`init`](Self::init) left them.
     pub unsafe fn deinit(&mut self) {
         if !self.global.is_null() {
             ffi::wl_global_destroy(self.global);
@@ -208,7 +215,7 @@ unsafe extern "C" fn xkb_config_destroy(_client: *mut ffi::wl_client, resource: 
     ffi::wl_resource_post_error(
         resource,
         ffi::river_xkb_config_v1_error_RIVER_XKB_CONFIG_V1_ERROR_INVALID_DESTROY,
-        b"destroy before finished event sent\0".as_ptr() as *const _,
+        c"destroy before finished event sent".as_ptr(),
     );
 }
 
@@ -274,7 +281,7 @@ unsafe extern "C" fn xkb_config_create_keymap(
         ffi::wl_resource_post_error(
             resource,
             ffi::river_xkb_config_v1_error_RIVER_XKB_CONFIG_V1_ERROR_INVALID_FORMAT,
-            b"invalid format enum value\0".as_ptr() as *const _,
+            c"invalid format enum value".as_ptr(),
         );
         return;
     }
@@ -287,7 +294,7 @@ unsafe extern "C" fn xkb_config_create_keymap(
             std::ptr::null_mut(),
             Some(xkb_keymap_destroy_func),
         );
-        ffi::wl_resource_post_event(keymap_res, 1, b"failed to stat keymap fd\0".as_ptr() as *const _);
+        ffi::wl_resource_post_event(keymap_res, 1, c"failed to stat keymap fd".as_ptr());
         return;
     }
     let stat = statbuf.assume_init();
@@ -298,7 +305,7 @@ unsafe extern "C" fn xkb_config_create_keymap(
             std::ptr::null_mut(),
             Some(xkb_keymap_destroy_func),
         );
-        ffi::wl_resource_post_event(keymap_res, 1, b"keymap too small\0".as_ptr() as *const _);
+        ffi::wl_resource_post_event(keymap_res, 1, c"keymap too small".as_ptr());
         return;
     }
     if stat.st_size > 1024 * 1024 {
@@ -308,7 +315,7 @@ unsafe extern "C" fn xkb_config_create_keymap(
             std::ptr::null_mut(),
             Some(xkb_keymap_destroy_func),
         );
-        ffi::wl_resource_post_event(keymap_res, 1, b"keymap too large\0".as_ptr() as *const _);
+        ffi::wl_resource_post_event(keymap_res, 1, c"keymap too large".as_ptr());
         return;
     }
 
@@ -328,7 +335,7 @@ unsafe extern "C" fn xkb_config_create_keymap(
             std::ptr::null_mut(),
             Some(xkb_keymap_destroy_func),
         );
-        ffi::wl_resource_post_event(keymap_res, 1, b"failed to mmap() keymap fd\0".as_ptr() as *const _);
+        ffi::wl_resource_post_event(keymap_res, 1, c"failed to mmap() keymap fd".as_ptr());
         return;
     }
 
@@ -350,7 +357,7 @@ unsafe extern "C" fn xkb_config_create_keymap(
             std::ptr::null_mut(),
             Some(xkb_keymap_destroy_func),
         );
-        ffi::wl_resource_post_event(keymap_res, 1, b"failed to parse xkb keymap\0".as_ptr() as *const _);
+        ffi::wl_resource_post_event(keymap_res, 1, c"failed to parse xkb keymap".as_ptr());
         return;
     }
 

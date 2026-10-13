@@ -112,6 +112,12 @@ impl Osk {
     }
 }
 
+impl Default for Osk {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 unsafe extern "C" fn handle_hide_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     // The token is the seat id (`field_gone`).
     let sid = crate::seat::SeatId(data as usize as u32);

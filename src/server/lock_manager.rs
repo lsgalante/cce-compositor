@@ -75,6 +75,9 @@ impl LockManager {
         crate::shared::shared().store_lock_state(state);
     }
 
+    /// # Safety
+    /// `server` must point to the live `Server`, and `self` be its
+    /// `lock_manager`: the timers' callbacks reach the manager there.
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.set_state(LockState::Unlocked);
         std::ptr::write(&mut self.lock_waiters, None);
@@ -170,19 +173,15 @@ impl LockManager {
         }
 
         match self.state {
-            LockState::WaitingForLockSurfaces => {
-                if all_outputs_rendered_lock_surface {
-                    self.send_locked();
-                    crate::shared::scene().normal_tree.set_enabled(false);
-                    self.lock_surfaces_timer.arm(0);
-                    return true;
-                }
+            LockState::WaitingForLockSurfaces if all_outputs_rendered_lock_surface => {
+                self.send_locked();
+                crate::shared::scene().normal_tree.set_enabled(false);
+                self.lock_surfaces_timer.arm(0);
+                return true;
             }
-            LockState::WaitingForBlank => {
-                if all_outputs_blanked {
-                    self.send_locked();
-                    return true;
-                }
+            LockState::WaitingForBlank if all_outputs_blanked => {
+                self.send_locked();
+                return true;
             }
             _ => {}
         }
@@ -345,6 +344,9 @@ impl LockSurface {
         !lock_surface.is_null() && LIVE_LOCK_SURFACES.with(|l| l.borrow().contains(&lock_surface))
     }
 
+    /// # Safety
+    /// `wlr_lock_surface` must be a new surface of the live `lock`, as the
+    /// lock's `new_surface` signal hands one: its `data` is taken here.
     pub unsafe fn create(
         wlr_lock_surface: *mut ffi::wlr_session_lock_surface_v1,
         lock: *mut ffi::wlr_session_lock_v1,
@@ -383,6 +385,10 @@ impl LockSurface {
         Ok(lock_surface)
     }
 
+    /// # Safety
+    /// `lock_surface` must be a live lock surface [`create`](Self::create)
+    /// made, with its `lock` still live (its wlroots surface's destroy
+    /// handler); it is freed here.
     pub unsafe fn destroy(wm: &mut crate::window_manager::WindowManager, lock_surface: *mut Self) {
         let mut new_focus = Focus::None;
         let surfaces_head = &mut (*(*lock_surface).lock).surfaces as *mut ffi::wl_list as *mut WlList;

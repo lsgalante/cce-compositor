@@ -358,8 +358,8 @@ impl Default for Layout {
             desktop_cell_labels: true,
             bevel_enabled: true,
             bevel_thickness: 10.0,
-            bevel_light_x: -0.7071,
-            bevel_light_y: -0.7071,
+            bevel_light_x: -std::f32::consts::FRAC_1_SQRT_2,
+            bevel_light_y: -std::f32::consts::FRAC_1_SQRT_2,
             bevel_light_intensity: 0.6,
             bevel_shade_intensity: 0.5,
             bevel_shoulder: 0.55,
@@ -850,7 +850,7 @@ fn default_bevel_focus_sharpness() -> f64 { 3.0 }
 /// Map a compass point to a unit vector pointing TOWARD the light, in screen
 /// space (y down). Anything unrecognized keeps the DE's top-left default.
 pub fn parse_light_direction(s: &str) -> (f32, f32) {
-    let d = 0.7071_f32;
+    let d = std::f32::consts::FRAC_1_SQRT_2;
     match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "top" | "up" | "north" => (0.0, -1.0),
         "bottom" | "down" | "south" => (0.0, 1.0),
@@ -1219,11 +1219,7 @@ pub fn parse_hex_color(hex_str: &str) -> u32 {
     if hex.len() != 6 {
         return 0xFFFFFFFF; // fallback to white
     }
-    if let Ok(val) = u32::from_str_radix(hex, 16) {
-        val
-    } else {
-        0xFFFFFFFF
-    }
+    u32::from_str_radix(hex, 16).unwrap_or(0xFFFFFFFF)
 }
 
 /// Backdrop compression parameters for text of color `text_hex` that must
@@ -1241,7 +1237,7 @@ pub fn parse_hex_color(hex_str: &str) -> u32 {
 /// under the one asked for (droplet style on pure white: 4.5 asked, 2.7
 /// reached; 10 asked, 4.7 reached).
 pub fn backdrop_compress_params(text_hex: &str, ratio: f64) -> Option<(f32, f32, bool)> {
-    if !(ratio > 1.0) {
+    if ratio.is_nan() || ratio <= 1.0 {
         return None;
     }
     let hex = text_hex.trim_matches(|c| c == '"' || c == '\'' || c == ' ').trim_start_matches('#');
@@ -1417,11 +1413,7 @@ fn warn_if_command_missing(command: Option<&str>) {
 }
 
 pub fn parse_keysym(key_str: &str) -> u32 {
-    let name = if key_str.starts_with("XKB_KEY_") {
-        &key_str[8..]
-    } else {
-        key_str
-    };
+    let name = key_str.strip_prefix("XKB_KEY_").unwrap_or(key_str);
     xkbcommon::xkb::keysym_from_name(name, xkbcommon::xkb::KEYSYM_CASE_INSENSITIVE).into()
 }
 

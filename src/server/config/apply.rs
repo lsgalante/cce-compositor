@@ -68,7 +68,7 @@ pub fn parse_config(
         next_layout.touchpad_view_apps = tv.and_then(|w| w.touchpad_view_apps.clone()).unwrap_or_default();
         next_layout.touchpad_view_swipe_tumble = tv
             .and_then(|w| w.touchpad_view_swipe.as_deref())
-            .map_or(false, |s| s.eq_ignore_ascii_case("tumble"));
+            .is_some_and(|s| s.eq_ignore_ascii_case("tumble"));
         next_layout.touchpad_view_sensitivity = tv.and_then(|w| w.touchpad_view_sensitivity).unwrap_or(1.0);
         next_layout.swipe_peek_px = tv
             .and_then(|w| w.swipe_peek)

@@ -18,6 +18,10 @@ impl Inspector {
         }
     }
 
+    /// # Safety
+    /// `server` must point to the live `Server`. This inspector (a `Server`
+    /// field) stays at its address for the display's life: the global and
+    /// every resource it binds carry a pointer to it.
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.client_states = HashMap::new();
         self.resources = Vec::new();
@@ -42,6 +46,12 @@ impl Inspector {
 
     pub fn deinit(&mut self) {
         self.global.destroy();
+    }
+}
+
+impl Default for Inspector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -96,7 +106,7 @@ unsafe extern "C" fn inspector_register_client(
     if surface.is_null() {
         return;
     }
-    (*inspector).client_states.entry(surface).or_insert_with(String::new);
+    (*inspector).client_states.entry(surface).or_default();
 }
 
 /// A memfd holding `data`, rewound to its start: the raw fd (whoever sends

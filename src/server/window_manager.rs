@@ -27,7 +27,7 @@ pub enum WindowManagerMode {
 /// whether an identical patch may be skipped (every reason but a style
 /// reload, which re-renders the same rect on purpose).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PatchReason {
+pub(crate) enum PatchReason {
     /// The displayed patch no longer covers the viewport, or no longer
     /// suits its resolution.
     Coverage,
@@ -516,7 +516,7 @@ pub fn window_by_query<'a>(windows: impl Iterator<Item = &'a Window>, query: &st
         if let Some(id) = id {
             return w.id().ipc() == id;
         }
-        w.get_app_id_string().map_or(false, |a| app_id_matches(query, &a))
+        w.get_app_id_string().is_some_and(|a| app_id_matches(query, &a))
     }).map(|w| w.id())
 }
 
@@ -556,7 +556,7 @@ pub fn app_id_matches(pattern: &str, app_id: &str) -> bool {
 }
 
 impl WindowManager {
-    pub fn init(&mut self) -> Result<(), ()> {
+    pub fn init(&mut self) {
         crate::wm_scope!(mut);
         // This is a stub for the 0-arg struct instantiation.
         // We will call the real initialization with the server parameter.
@@ -565,9 +565,12 @@ impl WindowManager {
         self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
         crate::shared::shared().store_mode(WindowManagerMode::Normal);
-        Ok(())
     }
 
+    /// # Safety
+    /// `self` must be the `wm` field of the live `Server` `server` points to,
+    /// whose display is up: the global's user data and the display-destroy
+    /// listener record this field's address.
     pub unsafe fn init_with_server(&mut self, server: *mut Server) -> Result<(), &'static str> {
         crate::wm_scope!(mut);
         self.global = crate::wlr::Wlr::null();
@@ -822,7 +825,7 @@ impl WindowManager {
             self.ipc_source = unsafe {
                 crate::event_source::FdSource::on_shared_loop(
                     std::os::fd::AsRawFd::as_raw_fd(&*wake),
-                    ffi::WL_EVENT_READABLE as u32,
+                    ffi::WL_EVENT_READABLE,
                     handle_ipc_event,
                     0,
                 )
@@ -845,7 +848,7 @@ impl WindowManager {
         self.stream_source = unsafe {
             crate::event_source::FdSource::on_shared_loop(
                 std::os::fd::AsRawFd::as_raw_fd(&*hub.wake),
-                ffi::WL_EVENT_READABLE as u32,
+                ffi::WL_EVENT_READABLE,
                 handle_stream_wake,
                 0,
             )
@@ -973,7 +976,7 @@ impl WindowManager {
         }
         // The WM's effective focus (overlay UI looked through): actions
         // triggered from a menu act on the real window underneath.
-        if let Some(id) = self.focused_window().filter(|&id| self.windows.get(id).map_or(false, |w| !w.closed)) {
+        if let Some(id) = self.focused_window().filter(|&id| self.windows.get(id).is_some_and(|w| !w.closed)) {
             focused = Some(id);
         }
 
@@ -988,7 +991,7 @@ impl WindowManager {
                 continue;
             }
             let app_id = w.get_app_id_string();
-            let is_status = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
+            let is_status = app_id.as_deref().is_some_and(|id| id.starts_with("cce-status"));
             let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
             let visible = !matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
             let resolved_mode = self.get_mode_for_window(w);
@@ -1132,8 +1135,8 @@ impl WindowManager {
 /// popup too — the Claude app's quick-entry window sets none, and without
 /// this it fell through to its main window's saved entry.
 pub fn mode_rule_matches(rule: &crate::config::ModeRule, app_id: Option<&str>, title: Option<&str>) -> bool {
-    let match_app = rule.app_id_pattern == "*" || app_id.map_or(false, |aid| aid.contains(&rule.app_id_pattern));
-    let match_title = rule.title_pattern.as_deref().map_or(true, |tp| title.unwrap_or("").contains(tp));
+    let match_app = rule.app_id_pattern == "*" || app_id.is_some_and(|aid| aid.contains(&rule.app_id_pattern));
+    let match_title = rule.title_pattern.as_deref().is_none_or(|tp| title.unwrap_or("").contains(tp));
     match_app && match_title
 }
 
@@ -1182,7 +1185,7 @@ impl WindowManager {
         if win.tiling_mode == crate::tiling::TilingMode::Popup {
             return crate::tiling::TilingMode::Popup;
         }
-        if app_id.map_or(false, |id| id.starts_with("cce-cloud")) {
+        if app_id.is_some_and(|id| id.starts_with("cce-cloud")) {
             return crate::tiling::TilingMode::Overlay;
         }
 
@@ -1266,10 +1269,9 @@ impl WindowManager {
                 if matches!(
                     op.op_type,
                     crate::seat::PointerOpType::Move | crate::seat::PointerOpType::GroupMove
-                ) {
-                    if seat.group_move.iter().any(|&(w, _, _)| w == id) {
-                        return true;
-                    }
+                ) && seat.group_move.iter().any(|&(w, _, _)| w == id)
+                {
+                    return true;
                 }
             }
         }
@@ -1360,7 +1362,7 @@ impl WindowManager {
         // raise here was clobbered by it.
         let bar_height = crate::shared::layout().bar_height;
         for w in self.windows.values_mut() {
-            if w.closed || !w.app_id_str().map_or(false, |id| id.starts_with("cce-status")) {
+            if w.closed || !w.app_id_str().is_some_and(|id| id.starts_with("cce-status")) {
                 continue;
             }
             let bg = w.box_geom;
@@ -1633,7 +1635,7 @@ impl WindowManager {
         for sid in self.seats.ids() {
             let Some(seat) = self.seats.get(sid) else { continue };
             let focused_visible = match seat.focused {
-                crate::seat::Focus::Window(id) => self.windows.get(id).map_or(false, |w| {
+                crate::seat::Focus::Window(id) => self.windows.get(id).is_some_and(|w| {
                     !w.closed && !w.minimized && matches!(w.state, crate::window::WindowState::Mapped)
                 }),
                 _ => true,
@@ -1913,7 +1915,7 @@ impl WindowManager {
         // Seat focus is on overlay UI (or nothing): the effective focused
         // window is the most recent real one still on screen.
         self.focus_history.iter().copied().find(|&id| {
-            self.windows.get(id).map_or(false, |w| {
+            self.windows.get(id).is_some_and(|w| {
                 !w.closed
                     && matches!(w.state, crate::window::WindowState::Mapped)
                     && !w.is_overlay_ui()
@@ -1990,7 +1992,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         // Overlay UI never enters the history: it takes input while open but
         // must not displace the real window as "most recently focused".
-        if self.windows.get(id).map_or(true, |w| w.is_overlay_ui()) {
+        if self.windows.get(id).is_none_or(|w| w.is_overlay_ui()) {
             return;
         }
         self.focus_history.retain(|&w| w != id);
@@ -2048,7 +2050,7 @@ impl WindowManager {
                 return false;
             }
             let app_id = w.get_app_id_string();
-            let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
+            let is_status_bar = app_id.as_deref().is_some_and(|id| id.starts_with("cce-status"));
             let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
             !is_status_bar && !is_wallpaper && !w.is_grid()
         };
@@ -2072,7 +2074,7 @@ impl WindowManager {
         // launcher (Popup) or an Overlay dock must never fire the camera
         // reaction — those close as part of using them.
         let departing_chrome = match seat_mut!(self, sid).focused {
-            crate::seat::Focus::Window(id) => self.windows.get(id).map_or(false, |w| {
+            crate::seat::Focus::Window(id) => self.windows.get(id).is_some_and(|w| {
                 matches!(w.tiling_mode, crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay)
             }),
             _ => false,
@@ -2682,7 +2684,7 @@ unsafe extern "C" fn handle_stream_timer(_data: *mut std::ffi::c_void) -> std::o
         }
         let frame = match captured.iter().find(|(w, _)| *w == id) {
             Some((_, f)) => f.clone(),
-            None => match wm.windows.get(id).map(|w| crate::screenshot::capture_window_rgba(w)) {
+            None => match wm.windows.get(id).map(crate::screenshot::capture_window_rgba) {
                 Some(Ok((rgba, w, h))) => {
                     let f = std::sync::Arc::new(crate::stream_server::Frame { width: w, height: h, rgba });
                     captured.push((id, f.clone()));

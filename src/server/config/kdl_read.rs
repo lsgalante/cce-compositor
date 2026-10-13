@@ -196,7 +196,7 @@ pub(crate) fn get_child_arg_vec2i_opt(node: &kdl::KdlNode, child_name: &str) -> 
             if child.name().value() == child_name {
                 let entries = child.entries();
                 if entries.len() >= 2 {
-                    let has_tag = entries.first().and_then(|e| e.ty()).map_or(false, |t| t.value() == "vec2i");
+                    let has_tag = entries.first().and_then(|e| e.ty()).is_some_and(|t| t.value() == "vec2i");
                     if has_tag {
                         let x = entries[0].value().as_i64()? as i32;
                         let y = entries[1].value().as_i64()? as i32;

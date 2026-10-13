@@ -45,6 +45,7 @@
 //! press on a selected window into a press on the background.
 
 use crate::window::Window;
+use std::f32::consts::FRAC_1_SQRT_2;
 use crate::window_manager::{WindowManager, WindowManagerMode};
 
 /// Pointer travel, in layout px on either axis, past which a background
@@ -110,6 +111,7 @@ pub fn touches(rect: (f64, f64, f64, f64), win: (f64, f64, f64, f64)) -> bool {
     ww > 0.0 && wh > 0.0 && rx < wx + ww && wx < rx + rw && ry < wy + wh && wy < ry + rh
 }
 
+#[derive(Default)]
 pub struct Selection {
     /// The selected windows, in `wm.windows` order. Entries are dropped in
     /// `Window::destroy`; a window that is merely unmapped or minimized
@@ -130,19 +132,6 @@ pub struct Selection {
     boxes: Vec<(crate::scene_handle::SceneRect, crate::scene_handle::SceneBevel)>,
 }
 
-impl Default for Selection {
-    fn default() -> Self {
-        Self {
-            windows: Vec::new(),
-            items: Vec::new(),
-            desktop_items: Vec::new(),
-            anchor: None,
-            marquee: None,
-            tree: crate::scene_handle::SceneTree::none(),
-            boxes: Vec::new(),
-        }
-    }
-}
 
 impl WindowManager {
     /// Layout box origin of the first enabled output, the one the camera is
@@ -171,11 +160,11 @@ impl WindowManager {
     }
 
     pub fn is_selected(&self, id: crate::window::WindowId) -> bool {
-        self.selection.windows.iter().any(|&w| w == id)
+        self.selection.windows.contains(&id)
     }
 
     pub fn is_item_selected(&self, id: u64) -> bool {
-        self.selection.items.iter().any(|&i| i == id)
+        self.selection.items.contains(&id)
     }
 
     /// Anything selected at all — what a background click drops, and what
@@ -227,7 +216,7 @@ impl WindowManager {
         let rect = marquee.rect();
         let mut picked: Vec<crate::window::WindowId> = Vec::new();
         for w in self.windows.values() {
-            if !self.selectable(&*w) {
+            if !self.selectable(w) {
                 continue;
             }
             let win = (
@@ -396,7 +385,7 @@ impl WindowManager {
         let (light_x, light_y) = {
             let (lx, ly) = (layout.bevel_light_x, layout.bevel_light_y);
             let len = (lx * lx + ly * ly).sqrt();
-            if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) }
+            if len > 1e-6 { (lx / len, ly / len) } else { (-FRAC_1_SQRT_2, -FRAC_1_SQRT_2) }
         };
         // The glint has to read whatever the window bevels are set to,
         // including off: it is the selection's outline, not a bevel.

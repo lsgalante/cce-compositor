@@ -24,6 +24,9 @@ pub struct InputPopup {
 unsafe impl crate::listener::Anchored for InputPopup {}
 
 impl InputPopup {
+    /// # Safety
+    /// `wlr_popup` must be a live input-popup surface no object of ours
+    /// holds, as an input method's `new_popup_surface` hands one.
     pub unsafe fn create(
         wm: &mut crate::window_manager::WindowManager,
         wlr_popup: *mut ffi::wlr_input_popup_surface_v2,
@@ -66,6 +69,9 @@ impl InputPopup {
         Ok(())
     }
 
+    /// # Safety
+    /// `self.wlr_popup` must be live, as it is for a popup
+    /// [`create`](Self::create) made until its destroy handler frees it.
     pub unsafe fn update(&mut self, wm: &crate::window_manager::WindowManager) {
         let text_input = wm.seats.get(self.sid).map_or(std::ptr::null_mut(), |seat| seat.relay.text_input());
         if text_input.is_null() {

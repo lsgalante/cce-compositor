@@ -24,6 +24,12 @@ impl CceWindowManagement {
     }
 }
 
+impl Default for CceWindowManagement {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Grid patch event opcode on zcce_toplevel_v1 (floating_state is 0).
 const ZCCE_TOPLEVEL_V1_GRID_PATCH: u32 = 1;
 
@@ -80,6 +86,11 @@ struct CceToplevelData {
     _resource: *mut ffi::wl_resource,
 }
 
+/// # Safety
+/// Registered only as the `get_cce_toplevel` request of
+/// `zcce_window_manager_v1` (`WM_INTERFACE`): libwayland calls it from the
+/// event loop with the live `client`, the manager `resource`, and a
+/// `wl_surface` resource as `surface_resource`.
 pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
     client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,

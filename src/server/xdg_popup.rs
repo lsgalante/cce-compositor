@@ -48,6 +48,10 @@ impl XdgPopup {
     /// `root` is the tree the popup's root surface's popups live in: for a
     /// top-level menu the same tree as `parent`, for a submenu the one its
     /// parent popup carries.
+    ///
+    /// # Safety
+    /// `wlr_popup` must point to a live `wlr_xdg_popup`, `parent` to a live
+    /// scene tree, and `capture_parent` and `root` to live scene trees or null.
     pub unsafe fn create(
         wlr_popup: *mut ffi::wlr_xdg_popup,
         parent: *mut ffi::wlr_scene_tree,

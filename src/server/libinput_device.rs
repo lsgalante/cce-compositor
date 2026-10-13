@@ -19,6 +19,10 @@ pub struct LibinputDeviceObject {
 }
 
 impl LibinputDevice {
+    /// # Safety
+    /// `server` must point to the live `Server`; `parent_device` must stay
+    /// live as long as the device, and `handle` be its live libinput handle.
+    /// The box must be [`deinit`](Self::deinit)ed before it is dropped.
     pub unsafe fn init(server: *mut crate::server::Server, parent_device: *mut InputDevice,
         handle: *mut ffi::libinput_device,
     ) -> Box<Self> {
@@ -39,6 +43,9 @@ impl LibinputDevice {
         dev
     }
 
+    /// # Safety
+    /// `parent_device` must be live, and `libinput` null or its live handle,
+    /// as [`init`](Self::init) sets them.
     pub unsafe fn apply_config(&self, config: &crate::config::InputConfig) {
         let handle = self.libinput;
         if handle.is_null() {
@@ -128,7 +135,7 @@ impl LibinputDevice {
             config.mouse.as_ref().and_then(|m| m.accel_profile.as_ref())
         };
         let profile_str = class_profile.or(config.accel_profile.as_ref());
-        if let Some(ref p_str) = profile_str {
+        if let Some(p_str) = profile_str {
             if ffi::libinput_device_config_accel_get_profiles(handle) != 0 {
                 let profile = match p_str.as_str() {
                     "flat" => Some(ffi::libinput_config_accel_profile_LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT),
@@ -176,6 +183,9 @@ impl LibinputDevice {
         }
     }
 
+    /// # Safety
+    /// No reference into the server's `libinput_config` may be live: the
+    /// device unregisters itself there through `shared::server_ptr`.
     pub unsafe fn deinit(&mut self) {
         for obj in self.objects.ptrs() {
             self.objects.remove(obj);
@@ -193,6 +203,11 @@ impl LibinputDevice {
         }
     }
 
+    /// # Safety
+    /// `config_v1_resource` must be a live `river_libinput_config_v1`
+    /// resource; `libinput` and `parent_device` must be live, and `self` be
+    /// the device [`init`](Self::init) boxed: each object keeps its address
+    /// until [`deinit`](Self::deinit).
     pub unsafe fn create_object(&mut self, config_v1_resource: *mut ffi::wl_resource) {
         let client = ffi::wl_resource_get_client(config_v1_resource);
         let version = ffi::wl_resource_get_version(config_v1_resource);
@@ -615,7 +630,7 @@ unsafe extern "C" fn device_set_calibration_matrix(
         ffi::wl_resource_post_error(
             resource,
             ffi::river_libinput_device_v1_error_RIVER_LIBINPUT_DEVICE_V1_ERROR_INVALID_ARG,
-            b"invalid calibration matrix\0".as_ptr() as *const _,
+            c"invalid calibration matrix".as_ptr(),
         );
         return;
     }
@@ -679,7 +694,7 @@ unsafe extern "C" fn device_set_accel_speed(
         ffi::wl_resource_post_error(
             resource,
             ffi::river_libinput_device_v1_error_RIVER_LIBINPUT_DEVICE_V1_ERROR_INVALID_ARG,
-            b"invalid accel speed\0".as_ptr() as *const _,
+            c"invalid accel speed".as_ptr(),
         );
         return;
     }

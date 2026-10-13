@@ -17,17 +17,17 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
         return;
     }
     crate::seat::Seat::handle_activity(wm, sid, sys);
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if cursor.view_drag.is_some() {
         crate::cursor::Cursor::end_view_drag(wm, sid, "button");
     }
     // Before the button reaches the client, so a click on the popup is not
     // a Ctrl-click (see `PopupWheel`).
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     cursor.end_popup_wheel("button");
     cursor.end_hscroll_shift("button");
     
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let lx = cursor.x();
     let ly = cursor.y();
 
@@ -81,7 +81,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
     let should_block_button = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
     
     if event.state == ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED {
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         if cursor.pressed.contains(&event.button) {
             log::error!("ignoring duplicate pointer button {} press", event.button);
             return;
@@ -91,7 +91,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
 
         // Status-bar segments are dragged either in adjust-position mode or
         // directly with super+left-drag (0x40 = WLR_MODIFIER_LOGO).
-        let super_held = seat_mut!(wm, sid, ()).wlr_seat().keyboard_modifiers() & 0x40 != 0;
+        let super_held = seat_mut!(wm, sid).wlr_seat().keyboard_modifiers() & 0x40 != 0;
         if event.button == 0x110 && (wm.adjust_position_mode || super_held) {
             let mut clicked_status: Option<crate::window::WindowId> = None;
             if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
@@ -111,10 +111,10 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 .map(|w| (w.id(), w.box_geom, w.virtual_x, w.virtual_y, w.tiling_mode, w.mode_locked));
             if let Some((status_id, bg, vx, vy, mode, locked)) = grab {
                 wm.stop_panning_animation();
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 let cursor_x = cursor.wlr_cursor().x();
                 let cursor_y = cursor.wlr_cursor().y();
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 seat.op = Some(crate::seat::SeatOp {
                     input: crate::seat::SeatOpInput::Pointer,
                     start_x: cursor_x as i32,
@@ -137,7 +137,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     started_in_overview: false,
                 });
                 crate::cursor::Cursor::op_start_pointer(wm, sid);
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.pressed.insert(event.button);
                 cursor.set_xcursor(c"grab");
                 return;
@@ -204,7 +204,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             // never sees the press, and the release decides
             // (`Cursor::button_press`, answered in the release path).
             if let (BorderZone::Button(elem), Some(id)) = (overview_border_zone, clicked_id) {
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.button_press = Some((id, elem));
                 cursor.pressed.insert(event.button);
                 return;
@@ -219,7 +219,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 let (vx, vy) = wm.layout_to_virtual(lx, ly);
                 if wm.selected_item_at(vx, vy).is_some() {
                     wm.stop_panning_animation();
-                    let seat = seat_mut!(wm, sid, ());
+                    let seat = seat_mut!(wm, sid);
                     seat.group_move.clear();
                     seat.group_items.clear();
                     // The first Tiled window carried is the snap anchor.
@@ -234,7 +234,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     for id in carried {
                         let Some(w) = wm.windows.get(id) else { continue };
                         let (vx, vy, mode) = (w.virtual_x, w.virtual_y, w.tiling_mode);
-                        let seat = seat_mut!(wm, sid, ());
+                        let seat = seat_mut!(wm, sid);
                         seat.group_move.push((id, vx, vy));
                         if mode == crate::tiling::TilingMode::Tiled {
                             if tiled_anchor.is_none() {
@@ -247,14 +247,14 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     let ids: Vec<u64> = wm.selection.items.clone();
                     for id in ids {
                         if let Some((x, y)) = wm.desktop_item(id).map(|item| (item.x, item.y)) {
-                            seat_mut!(wm, sid, ()).group_items.push((id, x, y));
+                            seat_mut!(wm, sid).group_items.push((id, x, y));
                         }
                     }
-                    let cursor = cursor_mut!(wm, sid, ());
+                    let cursor = cursor_mut!(wm, sid);
                     let cursor_x = cursor.wlr_cursor().x();
                     let cursor_y = cursor.wlr_cursor().y();
                     let (anchor_x, anchor_y) = tiled_anchor.unwrap_or((0.0, 0.0));
-                    let seat = seat_mut!(wm, sid, ());
+                    let seat = seat_mut!(wm, sid);
                     seat.op = Some(crate::seat::SeatOp {
                         input: crate::seat::SeatOpInput::Pointer,
                         start_x: cursor_x as i32,
@@ -277,7 +277,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         started_in_overview: true,
                     });
                     crate::cursor::Cursor::op_start_pointer(wm, sid);
-                    let cursor = cursor_mut!(wm, sid, ());
+                    let cursor = cursor_mut!(wm, sid);
                     cursor.pressed.insert(event.button);
                     cursor.set_xcursor(c"grab");
                     return;
@@ -302,7 +302,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 // cce-designer. The carried Floating windows are raised
                 // here, in stacking order, and the grabbed one over them in
                 // `op_start_pointer`.
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 seat.group_move.clear();
                 seat.group_items.clear();
                 if wm.is_selected(clicked_id) {
@@ -316,7 +316,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     for id in carried {
                         let Some(w) = wm.windows.get(id) else { continue };
                         let floating = w.tiling_mode == crate::tiling::TilingMode::Floating;
-                        let seat = seat_mut!(wm, sid, ());
+                        let seat = seat_mut!(wm, sid);
                         seat.group_move.push((id, w.virtual_x, w.virtual_y));
                         if floating {
                             wm.raise_window(id);
@@ -326,18 +326,18 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     let ids: Vec<u64> = wm.selection.items.clone();
                     for id in ids {
                         if let Some((x, y)) = wm.desktop_item(id).map(|item| (item.x, item.y)) {
-                            seat_mut!(wm, sid, ()).group_items.push((id, x, y));
+                            seat_mut!(wm, sid).group_items.push((id, x, y));
                         }
                     }
                 } else {
                     wm.selection_clear();
                 }
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 let cursor_x = cursor.wlr_cursor().x();
                 let cursor_y = cursor.wlr_cursor().y();
                 let Some(w) = wm.windows.get(clicked_id) else { return };
                 let (bg, vx, vy, mode, locked) = (w.box_geom, w.virtual_x, w.virtual_y, w.tiling_mode, w.mode_locked);
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 seat.op = Some(crate::seat::SeatOp {
                     input: crate::seat::SeatOpInput::Pointer,
                     start_x: cursor_x as i32,
@@ -360,7 +360,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     started_in_overview: in_overview,
                 });
                 crate::cursor::Cursor::op_start_pointer(wm, sid);
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.pressed.insert(event.button);
                 cursor.set_xcursor(c"grab");
                 return;
@@ -371,7 +371,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 // IS the dismissal: cce-cloud closes itself on keyboard
                 // leave, the same signal a normal-mode click-away produces
                 // through its focus change.
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) =
                     seat.layer_shell.scheduled_focus
                 {
@@ -380,7 +380,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         // (`LayerSurfaces`).
                         if unsafe { is_cloud_layer(layer_surface) } {
                             crate::seat::Seat::focus_window(wm, sid, None);
-                            let cursor = cursor_mut!(wm, sid, ());
+                            let cursor = cursor_mut!(wm, sid);
                             cursor.pressed.insert(event.button);
                             return;
                         }
@@ -392,12 +392,12 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 // release path answers a press that never travelled.
                 wm.stop_panning_animation();
                 wm.selection_press(lx, ly);
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 seat.group_move.clear();
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 let cursor_x = cursor.wlr_cursor().x();
                 let cursor_y = cursor.wlr_cursor().y();
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 seat.op = Some(crate::seat::SeatOp {
                     input: crate::seat::SeatOpInput::Pointer,
                     start_x: cursor_x as i32,
@@ -420,14 +420,14 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     started_in_overview: true,
                 });
                 crate::cursor::Cursor::op_start_pointer(wm, sid);
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.pressed.insert(event.button);
                 cursor.set_xcursor(c"crosshair");
                 return;
             }
         }
 
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         let modifiers = seat.wlr_seat().keyboard_modifiers();
 
         if event.button == 0x111 && modifiers == 0 {
@@ -447,7 +447,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 }
             }
             if !clicked_interactive {
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.right_click_on_bg = true;
                 let x = cursor.x() as i32;
                 let y = cursor.y() as i32;
@@ -459,7 +459,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 // script asks `ccectl windows` nothing is focused. Hand it
                 // the window here instead. Only a window whose mode
                 // `set-mode` accepts is worth naming.
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 let focused = match seat.focused {
                     crate::seat::Focus::Window(id) => wm.windows.get(id),
                     _ => None,
@@ -485,7 +485,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 crate::seat::Seat::focus_window(wm, sid, None);
                 crate::shared::pending().dirty_windowing();
 
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.pressed.insert(event.button);
                 return;
             }
@@ -500,7 +500,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
         }
         
         if let Some(pb) = matched_pb {
-            let cursor = cursor_mut!(wm, sid, ());
+            let cursor = cursor_mut!(wm, sid);
             let lx = cursor.x();
             let ly = cursor.y();
             let mut target_id: Option<crate::window::WindowId> = None;
@@ -545,7 +545,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         None
                     }
                     crate::config::Action::Resize => {
-                        let edges = get_closest_edges(window_ref!(wm, id, ()), lx, ly);
+                        let edges = get_closest_edges(window_ref!(wm, id), lx, ly);
                         Some(crate::seat::PointerOpType::Resize { edges })
                     }
                     _ => None,
@@ -553,11 +553,11 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 
                 if let Some(ot) = op_type {
                     wm.stop_panning_animation();
-                    let cursor = cursor_mut!(wm, sid, ());
+                    let cursor = cursor_mut!(wm, sid);
                     let cursor_x = cursor.wlr_cursor().x();
                     let cursor_y = cursor.wlr_cursor().y();
                     let this = window_mut!(wm, id);
-                    let seat = seat_mut!(wm, sid, ());
+                    let seat = seat_mut!(wm, sid);
                     seat.op = Some(crate::seat::SeatOp {
                         input: crate::seat::SeatOpInput::Pointer,
                         start_x: cursor_x as i32,
@@ -580,7 +580,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
                     });
                     crate::cursor::Cursor::op_start_pointer(wm, sid);
-                    let cursor = cursor_mut!(wm, sid, ());
+                    let cursor = cursor_mut!(wm, sid);
                     cursor.pressed.insert(event.button);
 
                     match ot {
@@ -600,7 +600,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             }
         }
 
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         let lx = cursor.x();
         let ly = cursor.y();
         let mut border_id: Option<crate::window::WindowId> = None;
@@ -624,7 +624,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             let this = window_mut!(wm, id);
             let initial_mode = this.tiling_mode;
             let stores = stores!(wm);
-            let zone = get_border_zone(window_ref!(wm, id, ()), stores, lx, ly);
+            let zone = get_border_zone(window_ref!(wm, id), stores, lx, ly);
             // The window context menu (`scripts/cce-app-menu`, a cce-cloud
             // popup like the desktop menu and cce-grid's item menu). A
             // right-click on a handle disc opens it in either adjust mode;
@@ -643,7 +643,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 && modifiers == 0
                 && (!matches!(zone, BorderZone::None) || menu_on_body)
             {
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.right_click_on_border = true;
                 let x = cursor.x() as i32;
                 let y = cursor.y() as i32;
@@ -657,7 +657,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 let cmd = format!("{}/.local/bin/cce-app-menu -x {} -y {} -i {} -a {}", home, x, y, index, app_id);
                 wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.pressed.insert(event.button);
                 return;
             }
@@ -682,11 +682,11 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
 
                         // No focus on the grab (see the body grab above).
                         wm.stop_panning_animation();
-                        let cursor = cursor_mut!(wm, sid, ());
+                        let cursor = cursor_mut!(wm, sid);
                         let cursor_x = cursor.wlr_cursor().x();
                         let cursor_y = cursor.wlr_cursor().y();
                         let this = window_mut!(wm, id);
-                        let seat = seat_mut!(wm, sid, ());
+                        let seat = seat_mut!(wm, sid);
                         seat.op = Some(crate::seat::SeatOp {
                             input: crate::seat::SeatOpInput::Pointer,
                             start_x: cursor_x as i32,
@@ -709,7 +709,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
                         });
                         crate::cursor::Cursor::op_start_pointer(wm, sid);
-                        let cursor = cursor_mut!(wm, sid, ());
+                        let cursor = cursor_mut!(wm, sid);
                         cursor.pressed.insert(event.button);
 
                         let cursor_name = get_resize_cursor_name(edges);
@@ -722,12 +722,12 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         let current_time = event.time_msec;
                         let this = window_mut!(wm, id);
                         let is_titlebar = ly < this.box_geom.y as f64;
-                        let cursor = cursor_mut!(wm, sid, ());
+                        let cursor = cursor_mut!(wm, sid);
                         let is_double_click = is_titlebar
                             && Some(id) == cursor.last_click_window
                             && current_time.saturating_sub(cursor.last_click_time) < 300;
 
-                        let cursor = cursor_mut!(wm, sid, ());
+                        let cursor = cursor_mut!(wm, sid);
                         cursor.last_click_time = current_time;
                         cursor.last_click_window = Some(id);
 
@@ -743,7 +743,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                             }
                             crate::seat::Seat::focus_window(wm, sid, Some(id));
                             crate::shared::pending().dirty_windowing();
-                            let cursor = cursor_mut!(wm, sid, ());
+                            let cursor = cursor_mut!(wm, sid);
                             cursor.last_click_time = 0;
                             cursor.last_click_window = None;
                             return;
@@ -765,11 +765,11 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
 
                         // No focus on the grab (see the body grab above).
                         wm.stop_panning_animation();
-                        let cursor = cursor_mut!(wm, sid, ());
+                        let cursor = cursor_mut!(wm, sid);
                         let cursor_x = cursor.wlr_cursor().x();
                         let cursor_y = cursor.wlr_cursor().y();
                         let this = window_mut!(wm, id);
-                        let seat = seat_mut!(wm, sid, ());
+                        let seat = seat_mut!(wm, sid);
                         seat.op = Some(crate::seat::SeatOp {
                             input: crate::seat::SeatOpInput::Pointer,
                             start_x: cursor_x as i32,
@@ -792,7 +792,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
                         });
                         crate::cursor::Cursor::op_start_pointer(wm, sid);
-                        let cursor = cursor_mut!(wm, sid, ());
+                        let cursor = cursor_mut!(wm, sid);
                         cursor.pressed.insert(event.button);
 
                         cursor.set_xcursor(c"grab");
@@ -807,14 +807,14 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             }
         }
 
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         cursor.pressed.insert(event.button);
 
         if !should_block_button {
             let first_grab_button = cursor.notified_pressed.is_empty();
-            let seat = seat_mut!(wm, sid, ());
+            let seat = seat_mut!(wm, sid);
             seat.wlr_seat().pointer_notify_button(event.time_msec, event.button, event.state);
-            let cursor = cursor_mut!(wm, sid, ());
+            let cursor = cursor_mut!(wm, sid);
             cursor.notified_pressed.insert(event.button);
             // First grab button: record the pressed surface's layout origin
             // as the implicit grab's frame of reference (passthrough keeps
@@ -824,7 +824,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 let gly = cursor.y();
                 if let Some(result) = crate::shared::scene().at(wm, glx, gly) {
                     let ratio = result.surface_scale;
-                    let cursor = cursor_mut!(wm, sid, ());
+                    let cursor = cursor_mut!(wm, sid);
                     cursor.grab_scale = ratio;
                     cursor.grab_origin = (glx - result.sx / ratio, gly - result.sy / ratio);
                 }
@@ -833,15 +833,15 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 // against these values for the whole grab, so camera motion
                 // (which moves the node every frame) reads as nothing rather
                 // than as pointer motion. See the grab branch in passthrough.
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.grab_grid = None;
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 let grab_focused =
                     seat.wlr_seat().pointer_focused_surface();
                 if !grab_focused.is_null() {
                     if let Some((gsurf, nx, ny, scale, _, _)) = grid_node_info(wm) {
                         if gsurf == grab_focused {
-                            let cursor = cursor_mut!(wm, sid, ());
+                            let cursor = cursor_mut!(wm, sid);
                             cursor.grab_grid = Some((nx, ny, scale));
                         }
                     }
@@ -850,7 +850,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
         }
 
         // If pressed, update focus to window under cursor
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         let lx = cursor.x();
         let ly = cursor.y();
         let mut clicked_something = false;
@@ -902,32 +902,32 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
         // Pair the release for the client BEFORE any compositor-side
         // consumption below: if the press was forwarded, the release always
         // is too, or the client is left with an orphaned press.
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         if cursor.notified_pressed.remove(&event.button) {
-            let seat = seat_mut!(wm, sid, ());
+            let seat = seat_mut!(wm, sid);
             seat.wlr_seat().pointer_notify_button(event.time_msec, event.button, event.state);
         }
         // The implicit grab ends with its last button; the frozen grid
         // mapping must not outlive it into the next grab.
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         if cursor.notified_pressed.is_empty() {
             cursor.grab_grid = None;
         }
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         if seat.op.is_some() {
-            let cursor = cursor_mut!(wm, sid, ());
+            let cursor = cursor_mut!(wm, sid);
             let cursor_x = cursor.wlr_cursor().x();
             let cursor_y = cursor.wlr_cursor().y();
             crate::seat::Seat::op_update(wm, sid, cursor_x as i32, cursor_y as i32);
             
-            let seat = seat_mut!(wm, sid, ());
+            let seat = seat_mut!(wm, sid);
             let op = seat.op.unwrap();
 
             if op.op_type == crate::seat::PointerOpType::Select {
                 let dragged = wm.selection_release();
                 // Released before the op ends, so its end re-evaluates the
                 // pointer and the crosshair does not outlast the drag.
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.pressed.remove(&event.button);
                 crate::seat::Seat::op_end(wm, sid);
                 // A press that never travelled is a click on the desktop.
@@ -967,14 +967,14 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 if travel < STATUS_CLICK_TRAVEL {
                     log::info!("[StatusRelease] click (travel {:.1}px) on app_id={} — replayed, not snapped", travel, app_id);
                     crate::seat::Seat::op_end(wm, sid);
-                    let cursor = cursor_mut!(wm, sid, ());
+                    let cursor = cursor_mut!(wm, sid);
                     cursor.pressed.remove(&event.button);
                     let time = event.time_msec;
                     // Re-evaluate pointer focus onto the surface under the
                     // pointer (nothing was notified during the grab), then
                     // deliver the click.
                     crate::cursor::Cursor::passthrough(wm, sid, time);
-                    let seat = seat_mut!(wm, sid, ());
+                    let seat = seat_mut!(wm, sid);
                     seat.wlr_seat().pointer_notify_button(time, event.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED);
                     seat.wlr_seat().pointer_notify_frame();
                     seat.wlr_seat().pointer_notify_button(time, event.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
@@ -1136,7 +1136,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 );
 
                 crate::seat::Seat::op_end(wm, sid);
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 cursor.pressed.remove(&event.button);
                 crate::shared::pending().dirty_windowing();
                 return;
@@ -1162,11 +1162,11 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             }
             
             crate::seat::Seat::op_end(wm, sid);
-            let cursor = cursor_mut!(wm, sid, ());
+            let cursor = cursor_mut!(wm, sid);
             cursor.pressed.remove(&event.button);
             return;
         }
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         if cursor.pressed.remove(&event.button) {
             if event.button == 0x110 {
                 if let Some((id, elem)) = cursor.button_press.take() {
@@ -1185,7 +1185,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             if event.button == 0x111 && (cursor.right_click_on_bg || cursor.right_click_on_border) {
                 cursor.right_click_on_bg = false;
                 cursor.right_click_on_border = false;
-                if seat_mut!(wm, sid, ()).cursor.pressed.is_empty() && seat_mut!(wm, sid, ()).op.is_some() {
+                if seat_mut!(wm, sid).cursor.pressed.is_empty() && seat_mut!(wm, sid).op.is_some() {
                     crate::shared::pending().dirty_windowing();
                 }
                 return;
@@ -1193,7 +1193,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
 
             // The client-facing release (when the press was forwarded) is
             // already paired at the top of the release path.
-            if seat_mut!(wm, sid, ()).cursor.pressed.is_empty() && seat_mut!(wm, sid, ()).op.is_some() {
+            if seat_mut!(wm, sid).cursor.pressed.is_empty() && seat_mut!(wm, sid).op.is_some() {
                 crate::shared::pending().dirty_windowing();
             }
         } else {

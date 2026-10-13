@@ -187,11 +187,11 @@ impl WindowManager {
         self.state = WindowManagerState::InflightConfigures(0);
 
         for id in self.render_list_ids() {
-            if Window::manage_finish(self, id) {
-                if self.windows.get(id).is_some_and(|w| !w.wm_requested.resizing) {
-                    if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
-                        *count += 1;
-                    }
+            if Window::manage_finish(self, id)
+                && self.windows.get(id).is_some_and(|w| !w.wm_requested.resizing)
+            {
+                if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
+                    *count += 1;
                 }
             }
         }
@@ -370,9 +370,10 @@ impl WindowManager {
                         } else {
                             &crate::shared::scene().layers.top
                         }
-                    } else if window.rendering_requested.circular {
-                        &crate::shared::scene().layers.top
-                    } else if window.tiling_mode == crate::tiling::TilingMode::Overlay && crate::shared::layout().overlay_behavior == "above" {
+                    } else if window.rendering_requested.circular
+                        || (window.tiling_mode == crate::tiling::TilingMode::Overlay
+                            && crate::shared::layout().overlay_behavior == "above")
+                    {
                         &crate::shared::scene().layers.top
                     } else {
                         &crate::shared::scene().layers.wm
@@ -442,8 +443,8 @@ impl WindowManager {
             for w in self.windows.values() {
                 if !w.closed
                     && matches!(w.state, crate::window::WindowState::Mapped)
-                    && rendered_fullscreen(&*w)
-                    && !fullscreen_on_top(self, &*w)
+                    && rendered_fullscreen(w)
+                    && !fullscreen_on_top(self, w)
                 {
                     w.tree.raise_to_top();
                     w.popup_tree.place_above(&w.tree);
@@ -460,7 +461,7 @@ impl WindowManager {
             for w in self.windows.values() {
                 if !w.closed
                     && matches!(w.state, crate::window::WindowState::Mapped)
-                    && w.get_app_id_string().map_or(false, |id| id.ends_with("light_source"))
+                    && w.get_app_id_string().is_some_and(|id| id.ends_with("light_source"))
                 {
                     w.tree.raise_to_top();
                     w.popup_tree.place_above(&w.tree);

@@ -148,7 +148,7 @@ impl<K: Kind> Handle<K> {
 
     /// Whether dropping this handle destroys its node.
     pub fn is_owned(&self) -> bool {
-        self.slot.as_ref().map_or(false, |s| s.owned)
+        self.slot.as_ref().is_some_and(|s| s.owned)
     }
 
     /// The base node, or null when the handle is empty or its node is gone.
@@ -260,6 +260,7 @@ impl<K: Kind> Handle<K> {
         /// The backdrop compression of the node's blur.
         fn set_blur_compress(ceil: f32, knee: f32, invert: bool) => river_scene_node_set_blur_compress;
         /// Blur behind the node over the given region.
+        #[allow(clippy::too_many_arguments)]
         fn enable_blur(enabled: bool, optimized: bool, ignore_transparent: bool, x: i32, y: i32, width: i32, height: i32, corner_radius: i32) => river_scene_node_enable_blur;
     }
 
@@ -698,7 +699,7 @@ mod tests {
         let tree = unsafe { SceneTree::create_in(scene.root()) };
         let a = SceneRect::create(&tree, 5, 5, &RED);
         let b = SceneRect::create(&tree, 5, 5, &RED);
-        let moved = vec![a];
+        let moved = [a];
         moved[0].set_position(7, 9);
         assert_eq!(moved[0].coords(), Some((7, 9, true)));
         moved[0].place_above(&b);

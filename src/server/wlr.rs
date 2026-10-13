@@ -416,6 +416,9 @@ impl Wlr<ffi::wlr_output> {
 
     /// Whether `mode` is one of this output's own modes (compared only, never
     /// read); false when unset.
+    // Safe with a raw pointer: the shim compares `mode` against the output's
+    // list and never reads through it.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn has_mode(&self, mode: *const ffi::wlr_output_mode) -> bool {
         self.live().is_some_and(|o| unsafe { ffi::river_wlr_output_has_mode(o, mode) })
     }
@@ -705,7 +708,7 @@ impl Wlr<ffi::wlr_pointer_constraint_v1> {
     /// Whether surface point (`sx`, `sy`) is inside the constraint's region.
     pub fn region_contains(&self, sx: f64, sy: f64) -> bool {
         self.live().is_some_and(|c| unsafe {
-            ffi::pixman_region32_contains_point(&mut (*c).region, sx as i32, sy as i32, std::ptr::null_mut()) != 0
+            ffi::pixman_region32_contains_point(&(*c).region, sx as i32, sy as i32, std::ptr::null_mut()) != 0
         })
     }
 
@@ -714,7 +717,7 @@ impl Wlr<ffi::wlr_pointer_constraint_v1> {
     pub fn region_confine(&self, sx: f64, sy: f64, tx: f64, ty: f64) -> Option<(f64, f64)> {
         let c = self.live()?;
         let (mut nx, mut ny) = (0.0, 0.0);
-        unsafe { ffi::wlr_region_confine(&mut (*c).region, sx, sy, tx, ty, &mut nx, &mut ny) }.then_some((nx, ny))
+        unsafe { ffi::wlr_region_confine(&(*c).region, sx, sy, tx, ty, &mut nx, &mut ny) }.then_some((nx, ny))
     }
 
     /// The client's cursor hint (surface coordinates), when it set one.
@@ -1277,11 +1280,11 @@ impl Wlr<ffi::wlr_xdg_popup> {
     /// and schedule the configure that tells the client.
     pub fn unconstrain_and_configure(&self, toplevel_box: &ffi::wlr_box) {
         if let Some(p) = self.live() {
-            let mut constraint = *toplevel_box;
+            let constraint = *toplevel_box;
             // SAFETY: `constraint` is a local the call only reads; the popup's
             // xdg surface is live with it.
             unsafe {
-                ffi::wlr_xdg_popup_unconstrain_from_box(p, &mut constraint);
+                ffi::wlr_xdg_popup_unconstrain_from_box(p, &constraint);
                 ffi::wlr_xdg_surface_schedule_configure(ffi::river_wlr_xdg_popup_get_base(p));
             }
         }

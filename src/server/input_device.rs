@@ -54,6 +54,12 @@ pub struct InputDeviceObject {
 impl InputDevice {
     /// `server` is the caller's: the device registers with the input
     /// manager, and a physical one with the libinput and xkb configs.
+    ///
+    /// # Safety
+    /// `server` must point to the live `Server`, with no borrow of its input
+    /// manager, libinput or xkb config held across the call; `seat` must be
+    /// null or a live seat (only its id is read), and `wlr_device` a live
+    /// `wlr_input_device`.
     pub unsafe fn new(
         server: *mut crate::server::Server,
         outputs: &crate::output::Outputs,
@@ -147,6 +153,9 @@ impl InputDevice {
         device
     }
 
+    /// # Safety
+    /// `self` must be a registered device whose `wlr_device` (and, for a
+    /// keyboard, the `Keyboard` in `destroy_data`) is still live.
     pub unsafe fn assign_to_seat(&mut self, wm: &mut crate::window_manager::WindowManager, new_seat: Option<crate::seat::SeatId>, sys: &mut crate::ctx::Sys) {
         let old_seat = self.sid;
         if old_seat == new_seat {
@@ -168,6 +177,9 @@ impl InputDevice {
     }
 
 
+    /// # Safety
+    /// `server` must point to the live `Server`, `im_v1_resource` to a live
+    /// `river_input_manager_v1` resource, and `self.wlr_device` must be live.
     pub unsafe fn create_object(&mut self, server: *mut crate::server::Server, im_v1_resource: *mut ffi::wl_resource) {
         if self.virtual_device {
             return;
@@ -220,7 +232,7 @@ impl InputDevice {
         ffi::wl_resource_post_event(resource, 1, proto_type); // type event
         
         let name = ffi::river_wlr_input_device_get_name(self.wlr_device);
-        let name_ptr = if !name.is_null() { name } else { b"\0".as_ptr() as *const _ };
+        let name_ptr = if !name.is_null() { name } else { c"".as_ptr() };
         ffi::wl_resource_post_event(resource, 2, name_ptr); // name event
 
         if version >= 2 {
@@ -239,7 +251,7 @@ impl InputDevice {
 }
 
 unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let device_ptr = crate::listener_owner!(listener, InputDevice, destroy_listener) as *mut InputDevice;
+    let device_ptr = crate::listener_owner!(listener, InputDevice, destroy_listener);
     let device = &mut *device_ptr;
     
     log::debug!(
@@ -382,7 +394,7 @@ unsafe extern "C" fn input_device_set_repeat_info(
         ffi::wl_resource_post_error(
             resource,
             ffi::river_input_device_v1_error_RIVER_INPUT_DEVICE_V1_ERROR_INVALID_REPEAT_INFO,
-            b"negative rate/delay\0".as_ptr() as *const _,
+            c"negative rate/delay".as_ptr(),
         );
         return;
     }
@@ -412,7 +424,7 @@ unsafe extern "C" fn input_device_set_scroll_factor(
         ffi::wl_resource_post_error(
             resource,
             ffi::river_input_device_v1_error_RIVER_INPUT_DEVICE_V1_ERROR_INVALID_SCROLL_FACTOR,
-            b"negative scroll factor\0".as_ptr() as *const _,
+            c"negative scroll factor".as_ptr(),
         );
         return;
     }
@@ -480,7 +492,7 @@ unsafe extern "C" fn input_device_map_to_rectangle(
         ffi::wl_resource_post_error(
             resource,
             ffi::river_input_device_v1_error_RIVER_INPUT_DEVICE_V1_ERROR_INVALID_MAP_TO_RECTANGLE,
-            b"negative rectangle width/height\0".as_ptr() as *const _,
+            c"negative rectangle width/height".as_ptr(),
         );
         return;
     }
@@ -508,7 +520,7 @@ unsafe extern "C" fn input_device_map_to_rectangle(
                 ffi::wlr_cursor_map_input_to_region(
                     seat.cursor.wlr_cursor().ptr(),
                     (*device).wlr_device,
-                    &mut (*device).config.map_to_rectangle,
+                    &(*device).config.map_to_rectangle,
                 );
             }
         }

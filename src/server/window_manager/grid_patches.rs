@@ -171,7 +171,7 @@ impl WindowManager {
             // 0.05 comfort — the union patch is sized with 0.10, so this
             // demand always fits what was sent). A patch that fails only
             // here keeps displaying while its replacement renders.
-            let target_ok = target_rect.map_or(true, |(tx, ty, tw, th, tz)| {
+            let target_ok = target_rect.is_none_or(|(tx, ty, tw, th, tz)| {
                 let tmx = tw * 0.05;
                 let tmy = th * 0.05;
                 let tdisp = tz * out_scale / p.scale;
@@ -235,7 +235,7 @@ impl WindowManager {
             // flight is left to latch first, and the flag then re-sends
             // once it has become current.
             let stale = w.grid_patch_stale;
-            if !stale && !upgrade && w.grid_patch_current.as_ref().map_or(false, &covers) {
+            if !stale && !upgrade && w.grid_patch_current.as_ref().is_some_and(covers) {
                 continue;
             }
             if let Some(cur) = &w.grid_patch_current {
@@ -380,9 +380,9 @@ impl WindowManager {
         // MEANS the same rect — the pixels are what changed.
         if reason != PatchReason::StyleReload {
             let same = |p: &crate::policy::api::GridPatch| *p == patch;
-            if w.grid_patch_pending.as_ref().map_or(false, |(_, p)| same(p))
-                || w.grid_patch_acked.as_ref().map_or(false, |(_, p)| same(p))
-                || w.grid_patch_current.as_ref().map_or(false, same)
+            if w.grid_patch_pending.as_ref().is_some_and(|(_, p)| same(p))
+                || w.grid_patch_acked.as_ref().is_some_and(|(_, p)| same(p))
+                || w.grid_patch_current.as_ref().is_some_and(same)
             {
                 // The upgrade would otherwise ask again on every arrange.
                 w.grid_patch_flight = flight;

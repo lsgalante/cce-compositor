@@ -219,6 +219,9 @@ impl Seat {
         &self.wlr_seat
     }
 
+    /// # Safety
+    /// `server` must point to the live `Server`, and the shared output
+    /// layout handle must be set: the cursor attaches to it.
     pub unsafe fn create(server: *mut Server, seats: &mut Seats, name: &str) -> Result<*mut Self, &'static str> {
         let name_c = std::ffi::CString::new(name).unwrap();
         let wlr_seat = ffi::wlr_seat_create((*server).wl_server, name_c.as_ptr());
@@ -373,6 +376,10 @@ impl Seat {
         self.x11_cursor_destroy.disconnect();
     }
 
+    /// # Safety
+    /// `device` is a live `InputDevice`: its `wlr_device` live, a keyboard's
+    /// `destroy_data` null or its live `Keyboard`, and `config.map_to_output`
+    /// null or a live output.
     pub unsafe fn attach_device(&mut self, device: *mut crate::input_device::InputDevice) {
         (*device).sid = Some(self.id);
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
@@ -401,15 +408,19 @@ impl Seat {
                 if !(*device).config.map_to_output.is_null() {
                     ffi::wlr_cursor_map_input_to_output(self.cursor.wlr_cursor().ptr(), (*device).wlr_device, (*device).config.map_to_output);
                 }
-                ffi::wlr_cursor_map_input_to_region(self.cursor.wlr_cursor().ptr(), (*device).wlr_device, &mut (*device).config.map_to_rectangle);
+                ffi::wlr_cursor_map_input_to_region(self.cursor.wlr_cursor().ptr(), (*device).wlr_device, &(*device).config.map_to_rectangle);
             }
             _ => {}
         }
         self.update_capabilities();
     }
 
+    /// # Safety
+    /// `device` is a live `InputDevice` attached to seat `sid`: its
+    /// `wlr_device` live, and a keyboard's `destroy_data` null or its live
+    /// `Keyboard`, whose `group` is null or live (and this seat's).
     pub unsafe fn detach_device(wm: &mut crate::window_manager::WindowManager, sid: SeatId, device: *mut crate::input_device::InputDevice, sys: &mut crate::ctx::Sys) {
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         ffi::wlr_cursor_detach_input_device(this.cursor.wlr_cursor().ptr(), (*device).wlr_device);
 
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
@@ -426,17 +437,15 @@ impl Seat {
         }
         if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
             let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
-            if !keyboard.is_null() {
-                if !(*keyboard).group.is_null() {
-                    let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
-                    (*(*keyboard).group).unregister_keyboard(keyboard);
-                    let seat: *mut Seat = seat_mut!(wm, sid, ());
-                    (*(*keyboard).group).unref(seat, &keys);
-                    (*keyboard).group = std::ptr::null_mut();
-                }
+            if !keyboard.is_null() && !(*keyboard).group.is_null() {
+                let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
+                (*(*keyboard).group).unregister_keyboard(keyboard);
+                let seat: *mut Seat = seat_mut!(wm, sid);
+                (*(*keyboard).group).unref(seat, &keys);
+                (*keyboard).group = std::ptr::null_mut();
             }
         }
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         this.update_capabilities();
     }
 
@@ -444,7 +453,7 @@ impl Seat {
     /// it darkened) and tell idle-notify clients. Through `wm.server` until
     /// the window manager is handed a Ctx (RFC step 4).
     pub fn handle_activity(wm: &mut crate::window_manager::WindowManager, sid: SeatId, sys: &mut crate::ctx::Sys) {
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         sys.idle.on_activity(&mut wm.outputs);
         this.wlr_seat().notify_idle_activity();
     }
@@ -522,7 +531,7 @@ impl Seat {
             }
         }
 
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         if this.focused == new_focus {
             // Re-focusing the already-focused window is still intent: a
             // click on the sliver of a mostly-hidden focused window (or on
@@ -645,7 +654,7 @@ impl Seat {
         // surface — a focus change only tells clients).
         let surface = new_focus.surface(wm);
         if !surface.is_null() {
-            let this = seat_mut!(wm, sid, ());
+            let this = seat_mut!(wm, sid);
             // SAFETY: `surface` is the live root surface the focus names.
             unsafe { this.focus_keyboard_enter(surface) };
             // An override-redirect window takes the keyboard only: it
@@ -654,7 +663,7 @@ impl Seat {
                 let (lx, ly) = (this.cursor.x(), this.cursor.y());
                 if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                     if result.surface == surface {
-                        let this = seat_mut!(wm, sid, ());
+                        let this = seat_mut!(wm, sid);
                         // SAFETY: as above.
                         unsafe { this.wlr_seat().pointer_notify_enter(surface, result.sx, result.sy) };
                     }
@@ -767,6 +776,9 @@ impl Seat {
         ffi::wlr_seat_keyboard_notify_enter(self.wlr_seat().ptr(), surface, std::ptr::null_mut(), 0, modifiers);
     }
 
+    /// # Safety
+    /// `wlr_surface` is null or a live `wlr_surface`. The seat's active
+    /// keyboard, if any, is a `KeyboardGroup`'s: its user data is read as one.
     pub unsafe fn keyboard_notify_enter(&mut self, wlr_surface: *mut ffi::wlr_surface) {
         if wlr_surface.is_null() {
             return;
@@ -812,8 +824,11 @@ impl Seat {
         );
     }
 
+    /// # Safety
+    /// As [`keyboard_notify_enter`](Self::keyboard_notify_enter), for
+    /// `target_surface`, and as [`InputRelay::focus`](crate::input_relay::InputRelay::focus).
     pub unsafe fn keyboard_enter_or_leave(wm: &mut crate::window_manager::WindowManager, sid: SeatId, target_surface: *mut ffi::wlr_surface) {
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         if !target_surface.is_null() {
             this.keyboard_notify_enter(target_surface);
         } else {
@@ -871,7 +886,7 @@ impl Seat {
     }
 
     pub fn manage_finish(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
 
         if crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked {
             return;
@@ -1077,7 +1092,7 @@ impl Seat {
 
     pub fn op_update(wm: &mut crate::window_manager::WindowManager, sid: SeatId, x: i32, y: i32) {
         let sp = Self::snap_params(wm);
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         if let Some(op) = this.op.as_mut() {
             op.x = x;
             op.y = y;
@@ -1118,12 +1133,12 @@ impl Seat {
                 wm.arm_border_fade();
                 // Out of the seat for the calls, which need `wm`; they
                 // read no seat.
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 let group_move = std::mem::take(&mut seat.group_move);
                 let group_items = std::mem::take(&mut seat.group_items);
                 carry_group_windows(wm, &group_move, None, gdx, gdy);
                 carry_group_items(wm, &group_items, gdx, gdy);
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 seat.group_move = group_move;
                 seat.group_items = group_items;
                 wm.queue_op_frame();
@@ -1209,7 +1224,7 @@ impl Seat {
                             seat.group_move = group_move;
                             seat.group_items = group_items;
 
-                            let (final_x, final_y) = window_ref!(wm, id, ()).virtual_to_screen(wm, vx, vy);
+                            let (final_x, final_y) = window_ref!(wm, id).virtual_to_screen(wm, vx, vy);
                             let this = window_mut!(wm, id);
                             this.rendering_requested.x = final_x;
                             this.rendering_requested.y = final_y;
@@ -1252,7 +1267,7 @@ impl Seat {
                         this.virtual_x = vx;
                         this.virtual_y = vy;
 
-                        let (final_x, final_y) = window_ref!(wm, id, ()).virtual_to_screen(wm, vx, vy);
+                        let (final_x, final_y) = window_ref!(wm, id).virtual_to_screen(wm, vx, vy);
 
                         let this = window_mut!(wm, id);
                         this.rendering_requested.x = final_x;
@@ -1295,7 +1310,7 @@ impl Seat {
     /// from the edge-pan tick's op_update, which is what re-arms the timer —
     /// so the scroll continues while the cursor rests pinned at the edge.
     fn update_edge_pan(wm: &mut crate::window_manager::WindowManager, sid: SeatId, lx: f64, ly: f64) {
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         let mut vx = 0.0;
         let mut vy = 0.0;
         let eligible = crate::shared::layout().desktop_edge_pan
@@ -1311,7 +1326,7 @@ impl Seat {
                 Some(ref op) => op
                     .window
                     .and_then(|id| wm.windows.get(id))
-                    .map_or(false, |w| !w.closed && !w.is_status_bar()),
+                    .is_some_and(|w| !w.closed && !w.is_status_bar()),
                 None => false,
             };
         if eligible {
@@ -1376,7 +1391,7 @@ impl Seat {
     }
 
     pub fn op_end(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         if let Some(op) = this.op.take() {
             log::debug!("end seat op");
             wm.edge_pan_vx = 0.0;
@@ -1420,7 +1435,7 @@ impl Seat {
             // The windows a group move carried land by the same rule as
             // the grabbed one, each on its own geometry — whether the grab
             // was a window or an image (then `live` is None).
-            let this = seat_mut!(wm, sid, ());
+            let this = seat_mut!(wm, sid);
             let group = std::mem::take(&mut this.group_move);
             for &(id, start_vx, start_vy) in group.iter() {
                 if Some(id) == live {
@@ -1438,11 +1453,11 @@ impl Seat {
             }
             // The images it carried are the grid's to keep: `drop` is its
             // cue to save them, if any actually moved.
-            let this = seat_mut!(wm, sid, ());
+            let this = seat_mut!(wm, sid);
             let items = std::mem::take(&mut this.group_items);
             let moved = items.iter().any(|&(id, sx, sy)| {
                 wm.desktop_item(id)
-                    .map_or(false, |i| i.x != sx || i.y != sy)
+                    .is_some_and(|i| i.x != sx || i.y != sy)
             });
             if moved {
                 if let Some(ref sender) = wm.status_sender {
@@ -1455,7 +1470,7 @@ impl Seat {
                 }
             }
         }
-        let this = seat_mut!(wm, sid, ());
+        let this = seat_mut!(wm, sid);
         this.group_move.clear();
         this.group_items.clear();
     }

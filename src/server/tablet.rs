@@ -8,6 +8,10 @@ pub struct Tablet {
 }
 
 impl Tablet {
+    /// # Safety
+    /// `server` must point to the live `Server`, `seat` to a live seat (not
+    /// null: its `wlr_seat` is read), and `wlr_device` to a live tablet
+    /// input device.
     pub unsafe fn create(
         server: *mut crate::server::Server,
         outputs: &crate::output::Outputs,
@@ -42,6 +46,9 @@ impl Tablet {
         Ok(tablet)
     }
 
+    /// # Safety
+    /// `tablet` came from [`create`](Self::create) and is freed here, once;
+    /// nothing uses it after (its device's destroy path is the caller).
     pub unsafe fn destroy(tablet: *mut Self) {
         let _boxed = Box::from_raw(tablet);
     }

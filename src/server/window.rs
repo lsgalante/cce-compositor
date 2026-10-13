@@ -94,6 +94,12 @@ impl Edges {
     }
 }
 
+impl Default for Edges {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Border {
     pub edges: Edges,
@@ -415,6 +421,12 @@ impl Configure {
             inform_fullscreen: false,
             resizing: false,
         }
+    }
+}
+
+impl Default for Configure {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -804,11 +816,11 @@ impl Window {
     fn pan_to_restored_fullscreen_spot(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
             || wm.camera_ramp_anim.is_some()
-            || window_ref!(wm, id, ()).fullscreen_yields(wm)
+            || window_ref!(wm, id).fullscreen_yields(wm)
         {
             return;
         }
-        let Some((px, py)) = window_ref!(wm, id, ()).fullscreen_anchor_pan(wm) else { return };
+        let Some((px, py)) = window_ref!(wm, id).fullscreen_anchor_pan(wm) else { return };
         if (wm.desk_pan_x - px).abs() >= 0.5 || (wm.desk_pan_y - py).abs() >= 0.5 {
             let this = window_mut!(wm, id);
             log::info!(
@@ -848,6 +860,10 @@ impl Window {
 
 
 
+    /// # Safety
+    /// `impl_type`'s pointer is null (for the caller to fill in through
+    /// [`set_impl`](Self::set_impl)) or this window's live implementation,
+    /// as `set_impl` requires: it is stored without that call.
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, impl_type: WindowImpl) -> Result<WindowId, &'static str> {
         // Every node below is a handle: an early return drops what was made
         // so far, which destroys it. Only the capture scene, a scene root
@@ -1408,7 +1424,7 @@ impl Window {
     pub fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
         let this = window_mut!(wm, id, Err("window gone before map"));
         log::debug!("window '{:?}' mapped", this.get_title());
-        if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+        if this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] map app={:?} was_state={:?} linked={}",
                 this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
         }
@@ -1456,7 +1472,7 @@ impl Window {
                 };
                 let mut loaded_edge = None;
                 if name == "light_source" {
-                    let mut light_pos = 2.356194490192345_f32; // Default 135 deg in rad
+                    let mut light_pos = 3.0 * std::f32::consts::FRAC_PI_4; // Default 135 deg in rad
                     if let Ok(content) = std::fs::read_to_string(cce_core::config::get_config_path()) {
                         let val = cce_core::config::parse_kdl_to_json(&content);
                         if let Some(wm_obj) = val.get("window_manager") {
@@ -1661,7 +1677,7 @@ impl Window {
     pub fn set_closing(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         if this.state != WindowState::Closing {
-            if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+            if this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status")) {
                 let this = window_mut!(wm, id);
                 log::debug!("[LinkDbg] set_closing app={:?} was_state={:?} was_linked={}",
                     this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
@@ -1675,7 +1691,7 @@ impl Window {
     pub fn unmap(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         log::debug!("window '{:?}' unmapped", this.get_title());
-        if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+        if this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status")) {
             let this = window_mut!(wm, id);
             log::debug!("[LinkDbg] unmap app={:?} state={:?} linked={}",
                 this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
@@ -1945,7 +1961,7 @@ impl Window {
         match this.state {
             WindowState::Init => {}
             WindowState::Closing => {
-                if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                if this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status")) {
                     let this = window_mut!(wm, id);
                     log::debug!("[LinkDbg] manage_start closing->init app={:?} was_linked={}",
                         this.get_app_id_string(), wm.rendering_requested.list.contains(&id));
@@ -1991,7 +2007,7 @@ impl Window {
                 let this = window_mut!(wm, id);
                 let is_linked = wm.rendering_requested.list.contains(&id);
                 if !is_linked {
-                    if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                    if this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status")) {
                         log::debug!("[LinkDbg] manage_start LINK app={:?} state={:?}",
                             this.get_app_id_string(), this.state);
                     }
@@ -2026,7 +2042,7 @@ impl Window {
                 if this.wm_requested.dimensions.is_none() {
                     return false;
                 }
-                if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                if this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status")) {
                     log::debug!("[LinkDbg] manage_finish ready->initialized app={:?} linked={}",
                         this.get_app_id_string(), wm.rendering_requested.list.contains(&id));
                 }
@@ -2097,31 +2113,29 @@ impl Window {
                 let this = window_mut!(wm, id, false);
                 log::info!("[Fullscreen] Saved window {:?} geometry: {}x{} at ({}, {})", this.get_title_string().as_deref().unwrap_or(""), this.saved_width, this.saved_height, this.saved_virtual_x, this.saved_virtual_y);
             }
-        } else if !new_fullscreen && this.was_fullscreen {
-            if this.saved_width > 0 && this.saved_height > 0 {
-                // Captures the on-screen fullscreen rect before the restore
-                // below rewrites box_geom.
-                Window::start_fs_anim(wm, id);
-                let this = window_mut!(wm, id, false);
-                this.last_fullscreen_at = Some((this.virtual_x, this.virtual_y));
-                this.box_geom.width = this.saved_width;
-                this.box_geom.height = this.saved_height;
-                this.virtual_x = this.saved_virtual_x;
-                this.virtual_y = this.saved_virtual_y;
-                this.was_fullscreen = false;
+        } else if !new_fullscreen && this.was_fullscreen && this.saved_width > 0 && this.saved_height > 0 {
+            // Captures the on-screen fullscreen rect before the restore
+            // below rewrites box_geom.
+            Window::start_fs_anim(wm, id);
+            let this = window_mut!(wm, id, false);
+            this.last_fullscreen_at = Some((this.virtual_x, this.virtual_y));
+            this.box_geom.width = this.saved_width;
+            this.box_geom.height = this.saved_height;
+            this.virtual_x = this.saved_virtual_x;
+            this.virtual_y = this.saved_virtual_y;
+            this.was_fullscreen = false;
 
-                this.wm_requested.dimensions = Some(crate::window::Dimensions {
-                    width: this.saved_width as u32,
-                    height: this.saved_height as u32,
-                });
-                this.wm_requested.bounds = crate::window::Dimensions {
-                    width: this.saved_width as u32,
-                    height: this.saved_height as u32,
-                };
+            this.wm_requested.dimensions = Some(crate::window::Dimensions {
+                width: this.saved_width as u32,
+                height: this.saved_height as u32,
+            });
+            this.wm_requested.bounds = crate::window::Dimensions {
+                width: this.saved_width as u32,
+                height: this.saved_height as u32,
+            };
 
-                crate::shared::pending().dirty_windowing();
-                log::info!("[Fullscreen] Restored window {:?} geometry: {}x{} at ({}, {})", this.get_title_string().as_deref().unwrap_or(""), this.saved_width, this.saved_height, this.saved_virtual_x, this.saved_virtual_y);
-            }
+            crate::shared::pending().dirty_windowing();
+            log::info!("[Fullscreen] Restored window {:?} geometry: {}x{} at ({}, {})", this.get_title_string().as_deref().unwrap_or(""), this.saved_width, this.saved_height, this.saved_virtual_x, this.saved_virtual_y);
         }
 
         let this = window_mut!(wm, id, false);
@@ -2304,7 +2318,7 @@ impl Window {
         let this = window_mut!(wm, id);
         this.wm_scheduled.dirty_app_id = true;
         let app_id_str = this.get_app_id_string();
-        if app_id_str.as_deref().map_or(false, |id| id.starts_with("cce-status") || id == "cce-wallpaper") {
+        if app_id_str.as_deref().is_some_and(|id| id.starts_with("cce-status") || id == "cce-wallpaper") {
             this.tiling_mode = crate::tiling::TilingMode::Status;
         }
         Window::try_restore(wm, id);
@@ -2524,8 +2538,8 @@ impl Window {
 
             self.fullscreen_background.set_enabled(!is_status_bar && !is_wallpaper);
             let (width, height) = output.sent.dimensions();
-            self.size_fullscreen_background(width as i32, height as i32);
-            clip = ffi::wlr_box { x: 0, y: 0, width: width as i32, height: height as i32 };
+            self.size_fullscreen_background(width, height);
+            clip = ffi::wlr_box { x: 0, y: 0, width, height };
             content_clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
 
             self.border.left.set_enabled(false);
@@ -2746,7 +2760,7 @@ impl Window {
             if self.fs_on_desk && self.fs_anim.is_none() {
                 if let Some(output) = self.fullscreen_output(stores) {
                     let (w, h) = output.sent.dimensions();
-                    self.size_fullscreen_background(w as i32, h as i32);
+                    self.size_fullscreen_background(w, h);
                 }
             }
 

@@ -841,7 +841,7 @@ pub(crate) fn proc_args(pid: i32) -> Vec<String> {
         .split(|&b| b == 0)
         .map(|arg| String::from_utf8_lossy(arg).into_owned())
         .collect();
-    if args.last().map_or(false, |s| s.is_empty()) {
+    if args.last().is_some_and(|s| s.is_empty()) {
         args.pop();
     }
     if !args.is_empty() && args[0].starts_with("/tmp/.mount_") {
@@ -904,7 +904,7 @@ pub(crate) fn saved_by_program(saved: &SavedWindowState, program: &str) -> bool 
         && saved
             .cmdline
             .strip_prefix(program)
-            .map_or(false, |rest| rest.is_empty() || rest.starts_with(' '))
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
 }
 
 /// Whether the app_id-only pass may hand `saved` to a window of `program`:

@@ -26,6 +26,9 @@ struct TearingHint {
 // API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
 unsafe impl crate::listener::Anchored for TearingHint {}
 
+/// # Safety
+/// Only as the `new_object` listener of the tearing-control manager: `data`
+/// is null or the new `wlr_tearing_control_v1`.
 pub unsafe extern "C" fn handle_new_tearing_hint(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let control = data as *mut ffi::wlr_tearing_control_v1;
     if control.is_null() {

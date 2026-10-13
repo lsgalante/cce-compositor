@@ -21,10 +21,13 @@ pub struct LayerShell {
 }
 
 impl LayerShell {
-    pub unsafe fn init(&mut self, wl_display: *mut ffi::wl_display) -> Result<(), ()> {
+    /// # Safety
+    /// `wl_display` must be the live display, and [`deinit`](Self::deinit)
+    /// must run before it is destroyed (the listener is on the shell's signal).
+    pub unsafe fn init(&mut self, wl_display: *mut ffi::wl_display) -> Result<(), &'static str> {
         self.wlr_shell = ffi::wlr_layer_shell_v1_create(wl_display, 4);
         if self.wlr_shell.is_null() {
-            return Err(());
+            return Err("Failed to init layer_shell");
         }
 
         self.new_surface.connect(&mut (*self.wlr_shell).events.new_surface, handle_new_surface);
@@ -70,9 +73,9 @@ impl LayerShell {
         for seat in seats.values_mut() {
             if let Some(key) = to_focus {
                 seat.layer_shell.scheduled_focus = LayerShellSeatFocus::Exclusive(key);
-            } else if matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
-                seat.layer_shell.scheduled_focus = LayerShellSeatFocus::None;
-            } else if matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::NonExclusive(key) if closing(key)) {
+            } else if matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_))
+                || matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::NonExclusive(key) if closing(key))
+            {
                 seat.layer_shell.scheduled_focus = LayerShellSeatFocus::None;
             }
         }
@@ -282,6 +285,11 @@ unsafe impl crate::listener::Anchored for LayerSurface {}
 
 impl LayerSurface {
     /// `surfaces` is the window manager's layer-surface store.
+    ///
+    /// # Safety
+    /// `wlr_layer_surface` must be a live layer surface (from the shell's
+    /// `new_surface`), and `surfaces` the store `reentry::wm` reaches: the
+    /// destroy handler takes the entry out of that one and frees the result.
     pub unsafe fn create(
         wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
         surfaces: &mut LayerSurfaces,
@@ -693,13 +701,13 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                 // shifted to sit on its parent window.
                 let raw = wlr.ptr();
                 if is_align_right {
-                    (*raw).pending.margin.right = (output_w - relative_parent_x - parent_w) + (*raw).pending.margin.right;
+                    (*raw).pending.margin.right += output_w - relative_parent_x - parent_w;
                     (*raw).current.margin.right = (*raw).pending.margin.right;
                 } else {
-                    (*raw).pending.margin.left = relative_parent_x + (*raw).pending.margin.left;
+                    (*raw).pending.margin.left += relative_parent_x;
                     (*raw).current.margin.left = (*raw).pending.margin.left;
                 }
-                (*raw).pending.margin.top = relative_parent_y + (*raw).pending.margin.top;
+                (*raw).pending.margin.top += relative_parent_y;
                 (*raw).current.margin.top = (*raw).pending.margin.top;
 
                 (*layer_surface).parent_offset_applied = true;

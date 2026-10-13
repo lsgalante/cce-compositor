@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
+use std::f32::consts::FRAC_1_SQRT_2;
 use crate::server::Server;
 use crate::layer_shell::LayerShellOutput;
 use crate::lock_manager::LockState;
@@ -82,6 +83,9 @@ impl OutputState {
         matches!(self.mode, OutputMode::None)
     }
 
+    /// # Safety
+    /// `state` must point to a live head state whose `mode`, when set, is a
+    /// live mode of its output.
     pub unsafe fn from_head_state(state: *const ffi::wlr_output_head_v1_state) -> Self {
         assert!((*state).enabled);
         let mode = if !(*state).mode.is_null() {
@@ -116,7 +120,7 @@ impl OutputState {
             OutputMode::Custom { width, height, .. } => (width, height),
             OutputMode::None => (0, 0),
         };
-        if (self.transform as u32) % 2 != 0 {
+        if !self.transform.is_multiple_of(2) {
             std::mem::swap(&mut w, &mut h);
         }
         (
@@ -135,11 +139,16 @@ impl OutputState {
         }
     }
 
+    /// # Safety
+    /// `wlr_state` must point to a live, initialised `wlr_output_state`.
     pub unsafe fn apply_no_modeset(&self, wlr_state: *mut ffi::wlr_output_state) {
         ffi::wlr_output_state_set_scale(wlr_state, self.scale);
         ffi::wlr_output_state_set_transform(wlr_state, self.transform);
     }
 
+    /// # Safety
+    /// As [`apply_no_modeset`](Self::apply_no_modeset); a `Standard` mode must
+    /// be a live mode of the output `wlr_state` will be committed to.
     pub unsafe fn apply_modeset(&self, wlr_state: *mut ffi::wlr_output_state) {
         let enabled = self.state == OutputStateValue::Enabled;
         ffi::wlr_output_state_set_enabled(wlr_state, enabled);
@@ -337,12 +346,16 @@ impl Output {
         false
     }
 
+    /// # Safety
+    /// `server` must point to the live `Server` and `wm` be its window
+    /// manager (where the keyed listeners look the output up); `wlr_output`
+    /// a live output, new from the backend, that no `Output` holds yet.
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, server: *mut Server, wlr_output: *mut ffi::wlr_output) -> Result<(), &'static str> {
         let title = format!("river - {}\0", std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output)).to_string_lossy());
         
         // Check if output is Wayland/X11 and set application title/app_id
         if ffi::wlr_output_is_wl(wlr_output) {
-            ffi::wlr_wl_output_set_app_id(wlr_output, "river\0".as_ptr() as *const _);
+            ffi::wlr_wl_output_set_app_id(wlr_output, c"river".as_ptr());
             ffi::wlr_wl_output_set_title(wlr_output, title.as_ptr() as *const _);
         } else if ffi::wlr_output_is_x11(wlr_output) {
             ffi::wlr_x11_output_set_title(wlr_output, title.as_ptr() as *const _);
@@ -540,7 +553,7 @@ impl Output {
         // rendering — and to any whose buffers are still shrunk from a
         // scale that has just returned to 1.0, which this pass resets.
         for window in wm.windows.values_mut() {
-            if (window.scale != 1.0 || window.x11_buffer_scale() != 1.0 || window.buffers_scaled) {
+            if window.scale != 1.0 || window.x11_buffer_scale() != 1.0 || window.buffers_scaled {
                 window.scale_only_render_finish();
             }
         }
@@ -908,7 +921,7 @@ impl Output {
         let (bevel_lx, bevel_ly) = {
             let (lx, ly) = (layout.bevel_light_x, layout.bevel_light_y);
             let len = (lx * lx + ly * ly).sqrt();
-            if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) }
+            if len > 1e-6 { (lx / len, ly / len) } else { (-FRAC_1_SQRT_2, -FRAC_1_SQRT_2) }
         };
         let bevel_pool = &mut self.grid_bevel_pool;
         let mut bevel_idx = 0;
@@ -1442,7 +1455,7 @@ unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut 
             output.present_refresh_ns = (*event).refresh as u64;
         }
         let period = output.refresh_period_ns();
-        let seq = (*event).seq as u32;
+        let seq = (*event).seq;
         let mut dropped = 0u64;
         if seq != 0 && output.present_seq != 0 && seq > output.present_seq + 1 {
             dropped = (seq - output.present_seq - 1) as u64;

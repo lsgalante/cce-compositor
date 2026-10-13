@@ -29,6 +29,12 @@ pub struct InputRelay {
     pub osk: crate::osk::Osk,
 }
 
+impl Default for InputRelay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InputRelay {
     /// The enabled text input (see the field), or null.
     pub fn text_input(&self) -> *mut TextInput {
@@ -101,6 +107,10 @@ impl InputRelay {
         }
     }
 
+    /// # Safety
+    /// `input_method` is a live `wlr_input_method_v2` (wlroots'
+    /// new-input-method event); the relay keeps it until its destroy
+    /// handler, connected here, clears it.
     pub unsafe fn new_input_method(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, input_method: *mut ffi::wlr_input_method_v2) {
         let seat = seat_mut!(wm, sid);
         let seat_name = seat.wlr_seat().name();
@@ -131,6 +141,10 @@ impl InputRelay {
         }
     }
 
+    /// # Safety
+    /// Seat `sid`'s relay `input_method` is null or the live one
+    /// [`new_input_method`](Self::new_input_method) took (its destroy
+    /// handler nulls it).
     pub unsafe fn disable_text_input(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         let this = &mut seat_mut!(wm, sid).relay;
         assert!(!this.text_input.is_null());
@@ -145,6 +159,9 @@ impl InputRelay {
         }
     }
 
+    /// # Safety
+    /// Seat `sid`, if it exists, has an enabled text input and a live
+    /// `input_method`: both are dereferenced unchecked.
     pub unsafe fn send_input_method_state(wm: &crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         let Some(seat) = wm.seats.get(sid) else { return };
         let input_method = seat.relay.input_method;
@@ -186,6 +203,10 @@ impl InputRelay {
     /// entered — whether or not an input method is running. river entered
     /// them only with one, but then no client ever enabled a field, and the
     /// on-screen keyboard (`osk.rs`) is driven by exactly that enable.
+    ///
+    /// # Safety
+    /// `new_focus` is null or a live `wlr_surface`; the relay's
+    /// `input_method` as [`disable_text_input`](Self::disable_text_input).
     pub unsafe fn focus(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, new_focus: *mut ffi::wlr_surface) {
         let this = &mut seat_mut!(wm, sid).relay;
         // Send leave events. A text input already on the new surface keeps

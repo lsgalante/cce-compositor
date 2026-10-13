@@ -181,7 +181,7 @@ pub fn ipc(wm: &mut WindowManager, args: &[&str]) -> String {
                 _ => return "error: usage: shortcut unbind <session> [<id>]\n".to_string(),
             };
             let before = wm.portal_shortcuts.len();
-            wm.portal_shortcuts.retain(|s| !(s.session == session && id.map_or(true, |id| s.id == id)));
+            wm.portal_shortcuts.retain(|s| !(s.session == session && id.is_none_or(|id| s.id == id)));
             log::info!("[shortcut] unbind {} {}: {} removed", session, id.unwrap_or("*"), before - wm.portal_shortcuts.len());
             "ok\n".to_string()
         }
@@ -216,7 +216,7 @@ mod tests {
     fn parses_spec_triggers() {
         let t = parse_trigger("CTRL+SHIFT+space").unwrap();
         assert_eq!(t.mods, MOD_CTRL | MOD_SHIFT);
-        assert_eq!(t.keysym, u32::from(xkbcommon::xkb::keysyms::KEY_space));
+        assert_eq!(t.keysym, xkbcommon::xkb::keysyms::KEY_space);
         assert_eq!(t.description, "Ctrl+Shift+Space");
     }
 

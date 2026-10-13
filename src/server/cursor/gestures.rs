@@ -84,7 +84,7 @@ pub(crate) fn on_swipe_begin(wm: &mut crate::window_manager::WindowManager, sid:
         return;
     }
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
@@ -100,7 +100,7 @@ pub(crate) fn on_swipe_begin(wm: &mut crate::window_manager::WindowManager, sid:
     // whenever fingers merely rest on the pad.
     wm.startup_input_seen = true;
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     cursor.gesture_dx = 0.0;
     cursor.gesture_dy = 0.0;
     cursor.gesture_triggered = false;
@@ -114,7 +114,7 @@ pub(crate) fn on_swipe_begin(wm: &mut crate::window_manager::WindowManager, sid:
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         crate::shared::handles().pointer_gestures.send_swipe_begin(seat.wlr_seat(),
             event.time_msec,
             event.fingers,
@@ -135,7 +135,7 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
         return;
     }
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
@@ -150,7 +150,7 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
     // (cancelled) end, so they hear nothing more of this swipe. Any other
     // bind (the overview toggle, a spawn) fires once per gesture: after
     // it the swipe is spent and the rest of it is ignored.
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if cursor.swipe_spent {
         return;
     }
@@ -167,7 +167,7 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
         cursor.gesture_dy
     );
 
-    let seat = seat_mut!(wm, sid, ());
+    let seat = seat_mut!(wm, sid);
     let modifiers = gesture_mods(seat.wlr_seat());
 
     // The first step of a swipe comes at `swipe_threshold`; every further
@@ -176,7 +176,7 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
     // again rather than running on through the next window. The lean
     // scales with the threshold in force, so it stays a preview of how
     // far the fingers are from the next step.
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let threshold = if cursor.gesture_triggered {
         crate::shared::layout().swipe_repeat_threshold
     } else {
@@ -236,7 +236,7 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
             !wm.focus_toward_lands(v, &matched_action)
         };
         if dead {
-            let cursor = cursor_mut!(wm, sid, ());
+            let cursor = cursor_mut!(wm, sid);
             if cursor.swipe_dead_end != Some(matched_action) {
                 log::info!("Swipe gesture {:?}: no window that way, holding the lean", matched_action);
             }
@@ -253,7 +253,7 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
 
     if matched_action != crate::config::Action::None {
         log::info!("Swipe gesture matched action: {:?}", matched_action);
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         cursor.swipe_dead_end = None;
         // This step's travel, before it restarts below: a focus swipe
         // aims along it (`swipe_focus_vector`).
@@ -328,9 +328,9 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
 
         if first_fire {
             let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
-            let cursor = cursor_mut!(wm, sid, ());
+            let cursor = cursor_mut!(wm, sid);
             if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
-                let seat = seat_mut!(wm, sid, ());
+                let seat = seat_mut!(wm, sid);
                 crate::shared::handles().pointer_gestures.send_swipe_end(seat.wlr_seat(),
                     event.time_msec,
                     true, // cancelled: true
@@ -357,7 +357,7 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
         // camera stays put until the bind fires, then jumps (the step's
         // ease is instant then, `advance_camera_animation`). A lean
         // already showing when they were turned off goes back the same way.
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         let full_px = if !cce_core::motion::enabled() {
             0.0
         } else if cursor.gesture_triggered {
@@ -387,13 +387,13 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
                     peek_px = step_peek_px(full_px, crate::shared::layout().swipe_near_peek_px, shape, pan);
                 }
             }
-            let cursor = cursor_mut!(wm, sid, ());
+            let cursor = cursor_mut!(wm, sid);
             if let Some(last) = cursor.swipe_lean_px {
                 peek_px = settle_peek(last, peek_px, event.dx.hypot(event.dy), threshold, full_px);
             }
             cursor.swipe_lean_px = Some(peek_px);
         }
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         let want = swipe_lean(dx, dy, navigates, threshold, peek_px, wm.desk_zoom);
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
         if delta != [0.0, 0.0] {
@@ -409,18 +409,18 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
                 wm.stop_panning_animation();
             }
             wm.queue_pan(delta[0], delta[1]);
-            let cursor = cursor_mut!(wm, sid, ());
+            let cursor = cursor_mut!(wm, sid);
             cursor.swipe_peek = want;
         }
     }
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if cursor.gesture_triggered {
         return;
     }
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         crate::shared::handles().pointer_gestures.send_swipe_update(seat.wlr_seat(),
             event.time_msec,
             event.dx,
@@ -442,7 +442,7 @@ pub(crate) fn on_swipe_end(wm: &mut crate::window_manager::WindowManager, sid: c
         return;
     }
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
@@ -452,7 +452,7 @@ pub(crate) fn on_swipe_end(wm: &mut crate::window_manager::WindowManager, sid: c
 
     log::info!("handle_swipe_end: cancelled={}", event.cancelled);
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let fired = std::mem::replace(&mut cursor.gesture_triggered, false);
 
     // Lifted short of a threshold — the first, or the next one after a
@@ -477,9 +477,9 @@ pub(crate) fn on_swipe_end(wm: &mut crate::window_manager::WindowManager, sid: c
     }
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         crate::shared::handles().pointer_gestures.send_swipe_end(seat.wlr_seat(),
             event.time_msec,
             event.cancelled,
@@ -561,7 +561,7 @@ pub(crate) fn on_pinch_begin(wm: &mut crate::window_manager::WindowManager, sid:
     // whenever fingers merely rest on the pad.
     wm.startup_input_seen = true;
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     cursor.gesture_scale = 1.0;
     cursor.gesture_triggered = false;
 
@@ -571,7 +571,7 @@ pub(crate) fn on_pinch_begin(wm: &mut crate::window_manager::WindowManager, sid:
     // for the whole gesture. Clients never see a begin, so update/end stay
     // ours too.
     let mut on_background = true;
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let (cx, cy) = (cursor.x(), cursor.y());
     if let Some(result) = crate::shared::scene().at(wm, cx, cy) {
         match result.data {
@@ -589,7 +589,7 @@ pub(crate) fn on_pinch_begin(wm: &mut crate::window_manager::WindowManager, sid:
     }
     if on_background {
         wm.stop_panning_animation();
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         cursor.pinch_zoom_active = true;
         cursor.pinch_start_zoom = wm.desk_zoom;
         return;
@@ -602,7 +602,7 @@ pub(crate) fn on_pinch_begin(wm: &mut crate::window_manager::WindowManager, sid:
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         crate::shared::handles().pointer_gestures.send_pinch_begin(seat.wlr_seat(),
             event.time_msec,
             event.fingers,
@@ -629,7 +629,7 @@ pub(crate) fn on_pinch_update(wm: &mut crate::window_manager::WindowManager, sid
     }
     crate::seat::Seat::handle_activity(wm, sid, sys);
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if cursor.view_drag_pinch_update(event.scale) {
         return;
     }
@@ -656,9 +656,9 @@ pub(crate) fn on_pinch_update(wm: &mut crate::window_manager::WindowManager, sid
 
     cursor.gesture_scale = event.scale;
 
-    let seat = seat_mut!(wm, sid, ());
-    let modifiers = gesture_mods(&seat.wlr_seat());
-    let cursor = cursor_mut!(wm, sid, ());
+    let seat = seat_mut!(wm, sid);
+    let modifiers = gesture_mods(seat.wlr_seat());
+    let cursor = cursor_mut!(wm, sid);
     let scale = cursor.gesture_scale;
     let bind = gesture_bind("pinch", event.fingers, modifiers, |d| pinch_hits(d, scale));
 
@@ -668,7 +668,7 @@ pub(crate) fn on_pinch_update(wm: &mut crate::window_manager::WindowManager, sid
 
         let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
         if !pointer_gestures.is_null() {
-            let seat = seat_mut!(wm, sid, ());
+            let seat = seat_mut!(wm, sid);
             crate::shared::handles().pointer_gestures.send_pinch_end(seat.wlr_seat(),
                 event.time_msec,
                 true, // cancelled: true
@@ -679,7 +679,7 @@ pub(crate) fn on_pinch_update(wm: &mut crate::window_manager::WindowManager, sid
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         crate::shared::handles().pointer_gestures.send_pinch_update(seat.wlr_seat(),
             event.time_msec,
             event.dx,
@@ -713,7 +713,7 @@ pub(crate) fn on_pinch_end(wm: &mut crate::window_manager::WindowManager, sid: c
         return;
     }
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     if cursor.pinch_zoom_active {
         // Camera zoom consumed the whole gesture; clients got no begin, so
         // they get no end. The camera simply stays where the fingers left it.
@@ -728,7 +728,7 @@ pub(crate) fn on_pinch_end(wm: &mut crate::window_manager::WindowManager, sid: c
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         crate::shared::handles().pointer_gestures.send_pinch_end(seat.wlr_seat(),
             event.time_msec,
             event.cancelled,

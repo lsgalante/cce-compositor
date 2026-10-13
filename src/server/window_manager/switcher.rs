@@ -183,7 +183,7 @@ impl WindowManager {
             // The switcher is gone; release its stdin unless a newer switcher
             // already replaced it.
             let mut active = ACTIVE_SWITCHER.lock().unwrap_or_else(|e| e.into_inner());
-            if active.as_ref().map_or(false, |h| h.generation == generation) {
+            if active.as_ref().is_some_and(|h| h.generation == generation) {
                 *active = None;
             }
         });

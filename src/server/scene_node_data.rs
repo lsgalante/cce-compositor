@@ -29,6 +29,10 @@ pub struct SceneNodeData {
 unsafe impl crate::listener::Anchored for SceneNodeData {}
 
 impl SceneNodeData {
+    /// # Safety
+    /// `node` must be a live scene node. A pointer in `data` must stay valid
+    /// until the node is destroyed: callers of [`from_node`](Self::from_node)
+    /// dereference it.
     pub unsafe fn attach(node: *mut ffi::wlr_scene_node, data: SceneNodeDataVal) {
         let scene_node_data = Box::new(SceneNodeData {
             node,
@@ -42,6 +46,10 @@ impl SceneNodeData {
         (*raw).destroy.connect(ffi::river_scene_node_get_destroy_signal(node), handle_destroy);
     }
 
+    /// # Safety
+    /// `node` is null or a live scene node. The `'static` is nominal: the
+    /// data is freed with the node that carries it, so do not keep the
+    /// reference across anything that may destroy scene nodes.
     pub unsafe fn from_node(node: *mut ffi::wlr_scene_node) -> Option<&'static SceneNodeData> {
         let mut n = node;
         while !n.is_null() {
@@ -59,6 +67,10 @@ impl SceneNodeData {
         None
     }
 
+    /// # Safety
+    /// `surface` is null or a live `wlr_surface`, whose root's user data is
+    /// null or its live scene node (as every role sets it); the reference is
+    /// as [`from_node`](Self::from_node)'s.
     pub unsafe fn from_surface(surface: *mut ffi::wlr_surface) -> Option<&'static SceneNodeData> {
         if surface.is_null() {
             return None;

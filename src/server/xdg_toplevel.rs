@@ -76,6 +76,9 @@ impl XdgToplevel {
         &self.wlr_toplevel
     }
 
+    /// # Safety
+    /// `wlr_toplevel` must point to a live `wlr_xdg_toplevel` not yet given an
+    /// `XdgToplevel`: the new one the xdg shell's `new_toplevel` hands over.
     pub unsafe fn create(
     wm: &mut crate::window_manager::WindowManager,
         wlr_toplevel: *mut ffi::wlr_xdg_toplevel,
@@ -227,8 +230,8 @@ impl XdgToplevel {
             // configure.
             let bounds_ok = (scheduled.bounds.width == sent.bounds.width
                 && scheduled.bounds.height == sent.bounds.height)
-                || (echo_w == Some(scheduled.bounds.width as u32)
-                    && echo_h == Some(scheduled.bounds.height as u32));
+                || (echo_w == Some(scheduled.bounds.width)
+                    && echo_h == Some(scheduled.bounds.height));
             let non_size_equal = scheduled.activated == sent.activated
                 && scheduled.ssd == sent.ssd
                 && scheduled.tiled == sent.tiled
@@ -485,7 +488,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     let is_self_sized = matches!(
         this.tiling_mode,
         crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
-    ) || this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+    ) || this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status"));
     if is_self_sized {
         this.box_geom.width = new_geometry.width;
         this.box_geom.height = new_geometry.height;
@@ -548,15 +551,11 @@ unsafe extern "C" fn handle_ack_configure(
     (*toplevel).acked_once = true;
 
     match (*toplevel).configure_state {
-        ConfigureState::Inflight(s) => {
-            if serial == s {
-                (*toplevel).configure_state = ConfigureState::Acked;
-            }
+        ConfigureState::Inflight(s) if serial == s => {
+            (*toplevel).configure_state = ConfigureState::Acked;
         }
-        ConfigureState::TimedOut(s) => {
-            if serial == s {
-                (*toplevel).configure_state = ConfigureState::TimedOutAcked;
-            }
+        ConfigureState::TimedOut(s) if serial == s => {
+            (*toplevel).configure_state = ConfigureState::TimedOutAcked;
         }
         _ => {}
     }
@@ -571,7 +570,7 @@ unsafe extern "C" fn handle_ack_configure(
     let is_self_sized = matches!(
         this.tiling_mode,
         crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
-    ) || this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+    ) || this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status"));
     if is_self_sized {
         this.box_geom.width = new_geometry.width;
         this.box_geom.height = new_geometry.height;
@@ -691,7 +690,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let scale = this.scale;
     let is_status = this.tiling_mode == crate::tiling::TilingMode::Status ||
                     app_id.starts_with("cce-status");
-    let is_decorated = crate::shared::layout().is_decorated_app(&app_id);
+    let is_decorated = crate::shared::layout().is_decorated_app(app_id);
     // Status segments are SELF-sizing (their bounds track their own box), so
     // the geometry of the commit being handled is the truth. `rendering_sent`
     // is a render-start snapshot that lags a contract commit by a render pass
@@ -755,7 +754,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
 
     if ffi::river_wlr_xdg_surface_get_initial_commit(base) {
         assert!(this.state != crate::window::WindowState::Ready);
-        if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+        if this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] initial commit -> ready app={:?} was_state={:?} linked={}",
                 this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
         }
@@ -768,7 +767,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         let is_self_sized = matches!(
             this.tiling_mode,
             crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
-        ) || this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+        ) || this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status"));
         if is_self_sized {
             this.box_geom.width = new_geometry.width;
             this.box_geom.height = new_geometry.height;
@@ -861,7 +860,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             this.rendering_scheduled.height = new_geometry.height as u32;
 
             let is_status = this.tiling_mode == crate::tiling::TilingMode::Status ||
-                            this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+                            this.get_app_id_string().is_some_and(|id| id.starts_with("cce-status"));
             // Overlay included so its scheduled size tracks the client's own; the
             // border itself is handled by the live-geometry sync above.
             let is_overlay = this.tiling_mode == crate::tiling::TilingMode::Overlay;
@@ -890,12 +889,12 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             }
 
             if let Some(sent_w) = this.configure_sent.width {
-                if !this.wm_requested.ssd && dec_w > 0 && new_geometry.width as u32 == sent_w.saturating_sub(dec_w as u32) {
-                    if !this.csd_buffer_size_bug {
-                        this.csd_buffer_size_bug = true;
-                        log::info!("Detected CSD buffer size bug for window '{}'. Activating workaround.", this.get_title_string().unwrap_or_default());
-                        crate::shared::pending().dirty_windowing();
-                    }
+                if !this.wm_requested.ssd && dec_w > 0 && new_geometry.width as u32 == sent_w.saturating_sub(dec_w as u32)
+                    && !this.csd_buffer_size_bug
+                {
+                    this.csd_buffer_size_bug = true;
+                    log::info!("Detected CSD buffer size bug for window '{}'. Activating workaround.", this.get_title_string().unwrap_or_default());
+                    crate::shared::pending().dirty_windowing();
                 }
             }
 
@@ -1193,7 +1192,7 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
     if ffi::river_wlr_xdg_surface_get_initialized(base) {
         let mut mode = (*(*decoration).wlr_decoration).requested_mode;
         if mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_NONE {
-            let rule_ssd = wm.get_rule_for_window(window_ref!(wm, id, ())).and_then(|r| r.ssd);
+            let rule_ssd = wm.get_rule_for_window(window_ref!(wm, id)).and_then(|r| r.ssd);
             if let Some(true) = rule_ssd {
                 mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
             } else {
@@ -1208,6 +1207,10 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
 }
 
 impl XdgDecoration {
+    /// # Safety
+    /// `wlr_decoration` must point to a new, live decoration whose toplevel
+    /// already has its `XdgToplevel`, and no window-manager borrow may be live:
+    /// this may run the request-mode handler, which takes one.
     pub unsafe fn init(wlr_decoration: *mut ffi::wlr_xdg_toplevel_decoration_v1) -> *mut Self {
         let base = ffi::river_wlr_xdg_toplevel_get_base((*wlr_decoration).toplevel);
         let toplevel = ffi::river_wlr_xdg_surface_get_data(base) as *mut XdgToplevel;
@@ -1231,6 +1234,9 @@ impl XdgDecoration {
         decoration
     }
 
+    /// # Safety
+    /// `decoration` must be a live `XdgDecoration` from [`init`](Self::init)
+    /// whose `wlr_decoration` and toplevel are still live; it is freed here.
     pub unsafe fn deinit(decoration: *mut XdgDecoration) {
         let base = ffi::river_wlr_xdg_toplevel_get_base((*(*decoration).wlr_decoration).toplevel);
         let toplevel = ffi::river_wlr_xdg_surface_get_data(base) as *mut XdgToplevel;

@@ -27,6 +27,10 @@ impl IdleInhibitManager {
         std::ptr::write(std::ptr::addr_of_mut!((*this).inhibitors), crate::registry::Registry::new());
     }
 
+    /// # Safety
+    /// `self` must be the `idle_inhibit_manager` field of the live `Server`
+    /// `server` points to, whose display is up, and [`deinit`](Self::deinit)
+    /// must run before that display is destroyed.
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         let wlr_manager = ffi::wlr_idle_inhibit_v1_create((*server).wl_server);
         if wlr_manager.is_null() {
@@ -39,6 +43,9 @@ impl IdleInhibitManager {
         Ok(())
     }
 
+    /// # Safety
+    /// Every registered inhibitor is freed here through its
+    /// `inhibit_manager`, which must still be this manager at this address.
     pub unsafe fn deinit(&mut self) {
         self.new_idle_inhibitor.disconnect();
         
@@ -118,25 +125,6 @@ pub fn inhibitor_name(kind: &str, id: Option<&str>, title: Option<&str>) -> Stri
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::inhibitor_name;
-
-    #[test]
-    fn a_window_is_its_app_id_then_its_title_then_the_kind() {
-        assert_eq!(inhibitor_name("window", Some("cce-browser"), Some("Video")), "cce-browser");
-        assert_eq!(inhibitor_name("window", None, Some("Video")), "window:Video");
-        assert_eq!(inhibitor_name("window", Some(""), None), "window");
-    }
-
-    #[test]
-    fn other_surfaces_are_their_kind_with_an_optional_id() {
-        assert_eq!(inhibitor_name("layer", Some("bar"), None), "layer:bar");
-        assert_eq!(inhibitor_name("layer", None, None), "layer");
-        assert_eq!(inhibitor_name("lock-surface", None, None), "lock-surface");
-    }
-}
-
 pub struct IdleInhibitor {
     pub inhibit_manager: *mut IdleInhibitManager,
     pub wlr_inhibitor: *mut ffi::wlr_idle_inhibitor_v1,
@@ -149,6 +137,10 @@ pub struct IdleInhibitor {
 unsafe impl crate::listener::Anchored for IdleInhibitor {}
 
 impl IdleInhibitor {
+    /// # Safety
+    /// `wlr_inhibitor` must be a live inhibitor, and `inhibit_manager` the
+    /// live manager to register it in, which must outlive it: the result is
+    /// freed by [`destroy`](Self::destroy), which reaches the manager through it.
     pub unsafe fn create(
         wlr_inhibitor: *mut ffi::wlr_idle_inhibitor_v1,
         inhibit_manager: *mut IdleInhibitManager,
@@ -168,6 +160,10 @@ impl IdleInhibitor {
 
     /// The caller recounts after (not at shutdown, where nothing is left
     /// to keep awake).
+    ///
+    /// # Safety
+    /// `inhibitor` must be one [`create`](Self::create) returned and not yet
+    /// destroyed, and its manager still live; it is freed here.
     pub unsafe fn destroy(inhibitor: *mut Self) {
         (*inhibitor).listen_destroy.disconnect();
         (*(*inhibitor).inhibit_manager).inhibitors.remove(inhibitor);
@@ -197,4 +193,23 @@ unsafe extern "C" fn handle_inhibitor_destroy(
     IdleInhibitor::destroy(inhibitor);
     let server = crate::shared::server_ptr();
     recount(server, &*crate::reentry::wm(server));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inhibitor_name;
+
+    #[test]
+    fn a_window_is_its_app_id_then_its_title_then_the_kind() {
+        assert_eq!(inhibitor_name("window", Some("cce-browser"), Some("Video")), "cce-browser");
+        assert_eq!(inhibitor_name("window", None, Some("Video")), "window:Video");
+        assert_eq!(inhibitor_name("window", Some(""), None), "window");
+    }
+
+    #[test]
+    fn other_surfaces_are_their_kind_with_an_optional_id() {
+        assert_eq!(inhibitor_name("layer", Some("bar"), None), "layer:bar");
+        assert_eq!(inhibitor_name("layer", None, None), "layer");
+        assert_eq!(inhibitor_name("lock-surface", None, None), "lock-surface");
+    }
 }

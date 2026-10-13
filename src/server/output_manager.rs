@@ -66,6 +66,10 @@ pub fn output_at(lx: f64, ly: f64) -> *mut ffi::wlr_output {
 }
 
 impl OutputManager {
+    /// # Safety
+    /// `server` must point to the `Server`, its display up and its backend in
+    /// `shared::handles()`; [`deinit`](Self::deinit) must run before the
+    /// backend and the display go (the layout and globals made here die with it).
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.first_modeset = true;
         
@@ -127,6 +131,9 @@ impl OutputManager {
         Ok(())
     }
 
+    /// # Safety
+    /// Before the backend and the display are destroyed: it unlinks from
+    /// their signals and destroys the output layout, which dies with the display.
     pub unsafe fn deinit(&mut self) {
         self.manager_apply.disconnect();
         self.manager_test.disconnect();
@@ -155,7 +162,7 @@ impl OutputManager {
                 match output.sent.state {
                     OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
                         output.scene_output().set_position(output.sent.x, output.sent.y);
-                        crate::shared::handles().output_layout.add(&output.wlr_output(), output.sent.x, output.sent.y);
+                        crate::shared::handles().output_layout.add(output.wlr_output(), output.sent.x, output.sent.y);
                         if let Some(lock_surface) = lock.lock_surface_from_output(wlr_output) {
                             // SAFETY: a lock surface `lock_surface_from_output`
                             // finds is live.
@@ -193,7 +200,7 @@ impl OutputManager {
                         output.adjust_tree.set_position(output.sent.x, output.sent.y);
                     }
                     OutputStateValue::DisabledHard => {
-                        crate::shared::handles().output_layout.remove(&output.wlr_output());
+                        crate::shared::handles().output_layout.remove(output.wlr_output());
                         // All of them, rims and labels included: until
                         // 2026-10-10 this path left grid_bevel_tree and
                         // cell_label_tree naming children that died with
@@ -521,7 +528,7 @@ impl crate::output::Outputs {
             }
             if let Some(overlap) = crate::wlr::box_intersection(&layout_box, box_) {
                 let area = overlap.width * overlap.height;
-                if best.map_or(true, |(_, a)| area > a) {
+                if best.is_none_or(|(_, a)| area > a) {
                     best = Some((output, area));
                 }
             }

@@ -90,6 +90,9 @@ macro_rules! stores {
 /// alongside a shared `wm`, for the `&self` methods that read the window
 /// manager too.
 macro_rules! window_ref {
+    ($wm:expr, $id:expr) => {
+        window_ref!($wm, $id, ())
+    };
     ($wm:expr, $id:expr, $ret:expr) => {
         match $wm.windows.get($id) {
             Some(w) => w,

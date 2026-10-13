@@ -52,6 +52,10 @@ pub struct LibinputConfigObject {
 }
 
 impl LibinputConfig {
+    /// # Safety
+    /// `server` must point to the live `Server`. This config (a `Server`
+    /// field) stays at its address for the display's life: the global and
+    /// its protocol objects carry a pointer to it.
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.global = ffi::wl_global_create(
             (*server).wl_server,
@@ -67,6 +71,9 @@ impl LibinputConfig {
         Ok(())
     }
 
+    /// # Safety
+    /// Before the display is destroyed, and `global` is null or the live
+    /// global [`init`](Self::init) made.
     pub unsafe fn deinit(&mut self) {
         if !self.global.is_null() {
             ffi::wl_global_destroy(self.global);
@@ -169,7 +176,7 @@ unsafe extern "C" fn libinput_config_destroy(_client: *mut ffi::wl_client, resou
     ffi::wl_resource_post_error(
         resource,
         ffi::river_libinput_config_v1_error_RIVER_LIBINPUT_CONFIG_V1_ERROR_INVALID_DESTROY,
-        b"destroy before finished event sent\0".as_ptr() as *const _,
+        c"destroy before finished event sent".as_ptr(),
     );
 }
 

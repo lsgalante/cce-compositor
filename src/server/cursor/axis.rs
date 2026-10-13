@@ -54,7 +54,7 @@ impl AxisDevice {
 pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, event: &ffi::wlr_pointer_axis_event, device: AxisDevice, sys: &mut crate::ctx::Sys) {
     crate::seat::Seat::handle_activity(wm, sid, sys);
 
-    let seat = seat_mut!(wm, sid, ());
+    let seat = seat_mut!(wm, sid);
 
     let delta = event.delta * device.scroll_factor;
     let delta_discrete = (event.delta_discrete as f64 * device.scroll_factor) as i32;
@@ -64,35 +64,33 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
     let modifiers = seat.wlr_seat().keyboard_modifiers() | wm.injected_key_mods;
 
     if (modifiers & 0x44) == 0x44 {
-        if event.orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
-            if delta != 0.0 {
-                // Each notch advances the zoom TARGET (successive notches
-                // accumulate into one glide); the animation tick eases the
-                // zoom there in log space, pivoting about the cursor every
-                // step. A pan glide or coast in flight yields to the zoom.
-                let base = wm.target_desk_zoom.unwrap_or(wm.desk_zoom);
-                let new_zoom = crate::policy::camera::wheel_zoom(base, delta);
-                if new_zoom != base {
-                    let cursor = cursor_mut!(wm, sid, ());
-                    let cx = cursor.x();
-                    let cy = cursor.y();
-                    let (phys_x, phys_y) = crate::shared::handles()
-                        .output_layout
-                        .closest_box(cx, cy)
-                        .map_or((0.0, 0.0), |b| (b.x as f64, b.y as f64));
-                    wm.stop_panning_animation();
-                    wm.target_desk_zoom = Some(new_zoom);
-                    wm.zoom_anchor = Some((cx - phys_x, cy - phys_y));
-                    wm.set_mode(if crate::policy::camera::is_overview(new_zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal });
-                    wm.start_panning_animation();
-                }
+        if event.orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL && delta != 0.0 {
+            // Each notch advances the zoom TARGET (successive notches
+            // accumulate into one glide); the animation tick eases the
+            // zoom there in log space, pivoting about the cursor every
+            // step. A pan glide or coast in flight yields to the zoom.
+            let base = wm.target_desk_zoom.unwrap_or(wm.desk_zoom);
+            let new_zoom = crate::policy::camera::wheel_zoom(base, delta);
+            if new_zoom != base {
+                let cursor = cursor_mut!(wm, sid);
+                let cx = cursor.x();
+                let cy = cursor.y();
+                let (phys_x, phys_y) = crate::shared::handles()
+                    .output_layout
+                    .closest_box(cx, cy)
+                    .map_or((0.0, 0.0), |b| (b.x as f64, b.y as f64));
+                wm.stop_panning_animation();
+                wm.target_desk_zoom = Some(new_zoom);
+                wm.zoom_anchor = Some((cx - phys_x, cy - phys_y));
+                wm.set_mode(if crate::policy::camera::is_overview(new_zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal });
+                wm.start_panning_animation();
             }
         }
         return;
     }
 
     let (is_on_background, over_chrome) = {
-        let cursor = cursor_mut!(wm, sid, ());
+        let cursor = cursor_mut!(wm, sid);
         let lx = cursor.x();
         let ly = cursor.y();
         let mut over_interactive = false;
@@ -133,7 +131,7 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
     let is_finger = event.source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER
         || event.source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_CONTINUOUS;
 
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let mut was_panning = cursor.panning_gesture_active;
 
     if is_finger {
@@ -162,7 +160,7 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
                 } else {
                     wm.queue_pan(step, 0.0);
                 }
-                let cursor = cursor_mut!(wm, sid, ());
+                let cursor = cursor_mut!(wm, sid);
                 let dt_ms = now_ms.wrapping_sub(cursor.pan_last_msec[axis]).clamp(4, 100) as f64;
                 let sample = step / (dt_ms / 1000.0);
                 cursor.pan_vel[axis] = if cursor.pan_last_msec[axis] == 0 {
@@ -225,14 +223,14 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
     }
     // A horizontal one over an app in `touchpad_hscroll_shift_apps` is
     // delivered as Shift + vertical (see `HScrollShift`).
-    let cursor = cursor_mut!(wm, sid, ());
+    let cursor = cursor_mut!(wm, sid);
     let (cx, cy) = (cursor.x(), cursor.y());
     let target = if is_finger { Cursor::hscroll_shift_target(wm, cx, cy) } else { None };
     if is_finger && Cursor::hscroll_shift_axis(wm, sid, target, event, delta, delta_discrete, modifiers) {
         return;
     }
 
-    let seat = seat_mut!(wm, sid, ());
+    let seat = seat_mut!(wm, sid);
     seat.wlr_seat().pointer_notify_axis(event.time_msec, event.orientation, delta, delta_discrete, event.source, event.relative_direction);
 }
 
@@ -252,8 +250,8 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
 /// the surface (the on-screen cursor never moves), button and Space up
 /// when the fingers lift. Two-finger swipe pans (middle button) or tumbles
 /// (left) per `touchpad_view_swipe`, Shift picks the other, a pinch
-/// dollies (right button, distance from the log of the scale), and Ctrl
-/// + swipe passes through as a plain scroll — the same modifier Houdini
+/// dollies (right button, distance from the log of the scale), and
+/// Ctrl + swipe passes through as a plain scroll — the same modifier Houdini
 /// itself assigns to "simulate the mouse wheel" in gesture mode.
 ///
 /// Natural scrolling is undone here. libinput flips the sign of a finger
@@ -388,11 +386,11 @@ impl Cursor {
     /// "key", "ctrl" or "pinch" — so a stall reported later is diagnosable
     /// from the session log alone.
     pub fn end_view_drag(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, reason: &str) {
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         let Some(d) = this.view_drag.take() else { return };
         log::info!("[ViewDrag] end reason={} button={:#x} from_pinch={} at surface ({:.0}, {:.0})", reason, d.button, d.from_pinch, d.sx, d.sy);
         this.view_drag_timer.arm(0);
-        let seat = seat_mut!(wm, sid, ());
+        let seat = seat_mut!(wm, sid);
         let time = crate::util::msec_timestamp();
         if d.button_down {
             seat.wlr_seat().pointer_notify_button(time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
@@ -404,7 +402,7 @@ impl Cursor {
         }
         // Put the client's idea of the pointer back where the cursor is.
         Cursor::passthrough(wm, sid, time);
-        let this = cursor_mut!(wm, sid, ());
+        let this = cursor_mut!(wm, sid);
         this.wlr_seat().pointer_notify_frame();
     }
 
@@ -610,7 +608,7 @@ impl Cursor {
             if down {
                 mods.depressed |= 1u32 << idx;
             }
-            self.wlr_seat().keyboard_notify_modifiers(&mut mods);
+            self.wlr_seat().keyboard_notify_modifiers(&mods);
         }
     }
 
