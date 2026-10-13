@@ -261,8 +261,9 @@ framework. Understanding it is the prerequisite for touching any client.
   `display_list` (the single paint path) plus `overlay_quads` / `custom_vertices`,
   and the input hooks (`handle_pointer_move`, `handle_mouse_input`, …). Apps needing
   direct renderer access (3D scenes, app-shaped text, non-rect window chrome) use the
-  extended hooks `renderer_init` / `stage_renderer` / `standard_csd` /
-  `take_window_action` — `cce-designer` is the reference consumer. A client's
+  hook `renderer_init` and the extension traits `App3D` (`stage_renderer`) and `Csd`
+  (`standard_csd`, `take_window_action`), each reached through an accessor on
+  `Application` — `cce-designer` is the reference consumer. A client's
   `main.rs` is typically a struct implementing `Application` plus a one-line
   `cce_ui::engine::run::<MyApp>();`.
 - **Modules**: `widget/` (containers, inputs, display, editors), `scene/` (the arena,
