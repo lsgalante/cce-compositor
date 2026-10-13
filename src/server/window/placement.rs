@@ -713,8 +713,8 @@ impl Window {
         // Utility is exempt from the mode forcing ONLY — like
         // `try_hint_placement`, this owns the window's POSITION, never its
         // size. A Utility window already satisfies everything the forcing is
-        // for: it always floats, never tiles, and both the grid snap and the
-        // overview displacement skip it. Overwriting the field would silently
+        // for: it always floats, never tiles, and the grid snap skips it.
+        // Overwriting the field would silently
         // strip the mode — `set_utility` arrives before map, and every Utility
         // gate reads `tiling_mode` RAW — leaving the modal resizable, its
         // geometry saved, and a stale size restored over it next time.

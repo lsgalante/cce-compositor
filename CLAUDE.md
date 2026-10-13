@@ -750,7 +750,7 @@ Everything that refers to a window holds its `WindowId`
 (`crate::window::WindowId`, the policy crate's wrapper of the slot key;
 `Window::id()`): `focus_history`, the selection, `Seat::focused`
 (`Focus::Window(id)`), the seat op's grabbed window (`SeatOp::window`),
-the overview displacement ledger and `group_move`, the cursor's
+`group_move`, the cursor's
 `adjust_hover`, `hovered_border_window`, `button_press` and
 `last_click_window`, the render list, a window's own protocol objects
 (`XdgToplevel::window`, `XwaylandWindow::window`) and its
@@ -871,8 +871,8 @@ the same shape; one that only reads takes `&self` and `&WindowManager`.
 `crate::seat::Seat::focus(wm, seat.id, ..)`, and walk seats that need `wm`
 as `for sid in wm.seats.ids()`. A seat field a `wm`-taking helper needs
 beside the window manager is moved out for the call and put back
-(`group_move` / `group_items` / `overview_displaced` around
-`carry_group_windows` and `displace_covered`, which read no seat).
+(`group_move` / `group_items` around `carry_group_windows` and
+`carry_group_items`, which read no seat).
 `op_update` works on a copy of the `Copy` `SeatOp` once it has stored the
 new position.
 
@@ -1021,7 +1021,7 @@ injectors (`Cursor::inject_*`, and `touch_down/motion/up/cancel` for
 `ccectl touch`) take `wm` and call the `on_*` functions directly; the IPC
 handler's `for_each_cursor` / `for_each_seat_touch` hand the closure `self`
 as `|wm, cursor|`. Seat ops (`op_update`, `op_end`, `update_edge_pan`,
-`settle_tiling`, `snap_params`, the group carry and displace helpers), the
+`settle_tiling`, `snap_params`, the group carry helpers), the
 cursor's hover and op paths (`passthrough`, `set_border_hover`,
 `set_adjust_hover`, `op_start_pointer`, `op_end_pointer`, `update_state`,
 `warp_to`, `refresh_after_scene_change`, the view-drag and popup-wheel
@@ -1430,8 +1430,8 @@ two of them is a strip, so touching is enough.
   grabbed window actually took, snap included, so a group of Tiled windows
   steps in whole cells and re-tiles on release (`Seat::settle_tiling`, the
   geometric detection `op_end` always ran, now per window). Carried windows
-  count as `is_window_being_moved` and are skipped by the overview
-  displacement. A tap moves nothing and un-tiles nothing.
+  count as `is_window_being_moved`, as the grabbed one does. A tap moves
+  nothing and un-tiles nothing.
 - **The band is anchored in virtual coordinates**, so the edge auto-pan
   scrolls the desk under a held drag and the band grows with it. The Select
   arm queues the op frame like any other op for that reason: the edge-pan
@@ -1837,13 +1837,16 @@ motion and a hold do not count. Swipes were added on 2026-09-26: a login
 navigated only by three-finger swipes left each restored window's first
 focus wherever it sat, often half off screen, while a second focus panned.
 
-### Tiled windows stack (since 2026-10-13)
+### Windows stack: nothing pushes one aside (since 2026-10-13)
 
-Two tiled windows may share cells. Nothing moves one off another any more:
-an overview drag displaces only Floating windows, and only for a drag
-grabbed Floating (`displace_covered`; until then a tiled drag pushed the
-tiled windows it covered to the side it vacated, live), and a tiled window
-mapping onto another stays there (the spawn-time `avoid_tiled_overlap`,
+Two tiled windows may share cells, and nothing moves one window off another
+any more, tiled or floating. An overview drag displaces nothing: until then
+a dragged window pushed each window of its own kind that it covered past
+half to the side the drag vacated, live and provisionally (the seat's
+`displace_covered`, which applied the policy crate's `overview::displace`,
+and its `overview_displaced` ledger of where each had come from, are gone).
+A tiled
+window mapping onto another stays there (the spawn-time `avoid_tiled_overlap`,
 which stepped it onto the nearest free cells, is gone; session restore was
 already exempt). The stacking follows focus: `Seat::focus` raises a Tiled
 window as it does a Floating one, and `op_start_pointer` raises a grabbed
@@ -1854,8 +1857,8 @@ tiled window rises only among the tiled windows. The keyboard
 `move_window_*` step stacks too (`cce-window-manager` `actions::move_window`):
 a tiled window steps one cell and covers whatever is there, where it used
 to swap origins with the tiled window holding the destination. Left behind
-in the policy crate, no longer called for tiled windows:
-`overview::displace`'s tiled branch and `spawn::nearest_free`. Stacking order is not saved, so a session restore
+in the policy crate, no longer called at all: `overview::displace` and
+`spawn::nearest_free`. Stacking order is not saved, so a session restore
 re-stacks in map order. In a shadow: two `set-mode tiled` windows, an
 overview drag of one onto the other (`pointer-press` / `pointer-move-to` /
 `pointer-release`), then `ctl windows` shows both on the same cells and

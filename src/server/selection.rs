@@ -298,8 +298,7 @@ impl WindowManager {
     }
 
     /// Windows the band can pick up, and a group move can carry: the ones
-    /// with a place on the desk. The same set the overview displacement
-    /// considers (`seat::displace_covered`).
+    /// with a place on the desk.
     pub fn selectable(&self, w: &Window) -> bool {
         if w.closed || w.minimized {
             return false;

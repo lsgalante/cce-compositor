@@ -177,20 +177,12 @@ pub struct Seat {
     /// pan as always. Set-call-clear by the caller so a blocked focus
     /// can't leak the flag into a later, legitimate pan.
     pub suppress_focus_pan: bool,
-    /// Overview-move displacement ledger: windows currently displaced out
-    /// of the way of the active move op, with their pre-displacement
-    /// virtual positions. While the button is held displacement is
-    /// PROVISIONAL — every motion re-evaluates each entry at the spot it
-    /// was pushed FROM, so a drag that moves away releases the window back
-    /// home. Cleared (finalizing the positions) in `op_end`. Lives on the
-    /// Seat because `SeatOp` is `Copy`.
-    pub overview_displaced: Vec<(crate::window::WindowId, f64, f64)>,
     /// The other selected windows a move op carries along, with the virtual
     /// position each had at the grab: a press on the body of a selected
     /// window moves the whole selection (`crate::selection`). They follow
     /// the grabbed window's SNAPPED position rigidly, by the same offset.
     /// Empty for an ordinary move. Filled at the grab, cleared in `op_end`;
-    /// on the Seat for the reason `overview_displaced` is.
+    /// on the Seat because `SeatOp` is `Copy`.
     pub group_move: Vec<(crate::window::WindowId, f64, f64)>,
     /// The selected desktop images a group move carries: the grid's id and
     /// the virtual position each had at the grab. Filled beside
@@ -251,7 +243,6 @@ impl Seat {
             modifiers_old: 0,
             op: None,
             suppress_focus_pan: false,
-            overview_displaced: Vec::new(),
             group_move: Vec::new(),
             group_items: Vec::new(),
             request_set_cursor: std::mem::zeroed(),
@@ -1201,34 +1192,6 @@ impl Seat {
                             this.virtual_x = vx;
                             this.virtual_y = vy;
 
-                            // Overview moves of a Floating window displace
-                            // the Floating windows they cover: any the drag
-                            // covers past the threshold scoots to the side
-                            // the drag vacated. A tiled drag displaces
-                            // nothing — tiled windows stack
-                            // (`displace_covered`).
-                            if crate::shared::mode()
-                                == crate::window_manager::WindowManagerMode::Overview
-                                && !op.start_was_tiled
-                            {
-                                // Out of the seat for the call, which needs
-                                // `wm`; it reads no seat.
-                                let seat = seat_mut!(wm, sid);
-                                let mut displaced = std::mem::take(&mut seat.overview_displaced);
-                                let group_move = std::mem::take(&mut seat.group_move);
-                                displace_covered(
-                                    wm,
-                                    id,
-                                    (virtual_dx, virtual_dy),
-                                    &sp,
-                                    &mut displaced,
-                                    &group_move,
-                                );
-                                let seat = seat_mut!(wm, sid);
-                                seat.overview_displaced = displaced;
-                                seat.group_move = group_move;
-                            }
-
                             // A group move: the rest of the selection
                             // follows by the offset the grabbed window
                             // actually took, snap included, so the group
@@ -1414,8 +1377,6 @@ impl Seat {
 
     pub fn op_end(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
         let this = seat_mut!(wm, sid, ());
-        // Wherever everything sits now is final.
-        this.overview_displaced.clear();
         if let Some(op) = this.op.take() {
             log::debug!("end seat op");
             wm.edge_pan_vx = 0.0;
@@ -1573,115 +1534,6 @@ fn carry_group_items(wm: &mut crate::window_manager::WindowManager, items: &[(u6
         sender.send_selection_line(&cce_core::ipc::ctl::SelectionEvent::Move(moves).to_string());
     }
     wm.schedule_frame_all_outputs();
-}
-
-/// Live overview displacement for one motion step of a move op: every
-/// mapped, visible Floating window the drag covers past the policy
-/// threshold relocates to the side the drag vacated
-/// (`crate::policy::overview::displace`). Single-level on purpose — a
-/// displaced window does not cascade into a third.
-///
-/// Tiled windows are never displaced (since 2026-10-13): they stack, so a
-/// tiled window dropped on another stays there, and whichever is focused
-/// is raised over the other (`Seat::focus`). Until then a tiled drag pushed
-/// the tiled windows it covered aside, which made stacking two impossible.
-/// The caller runs this only for a drag grabbed Floating (not the op's
-/// `start_was_tiled`), and the policy pairs a drag only with candidates of
-/// its own kind, so the candidates are the Floating windows alone.
-///
-/// Displacement is provisional while the button is held: `ledger` remembers
-/// every displaced window's pre-displacement position, and each motion
-/// re-evaluates the window AT THAT SPOT — a drag that stops covering it
-/// releases it back home. The ledger drops with the op on release, which
-/// finalizes wherever everything currently sits.
-fn displace_covered(
-    wm: &mut crate::window_manager::WindowManager,
-    moving: crate::window::WindowId,
-    drag_delta: (f64, f64),
-    sp: &crate::policy::snap::SnapParams,
-    ledger: &mut Vec<(crate::window::WindowId, f64, f64)>,
-    group: &[(crate::window::WindowId, f64, f64)],
-) {
-    // A window can close mid-drag; drop its entry before any deref.
-    ledger.retain(|&(id, _, _)| wm.windows.contains(id));
-    let Some(win) = wm.windows.get(moving) else { return };
-    let moved = (
-        win.virtual_x,
-        win.virtual_y,
-        win.box_geom.width as f64,
-        win.box_geom.height as f64,
-    );
-    let mut ids: Vec<crate::window::WindowId> = Vec::new();
-    let mut cands: Vec<crate::policy::overview::DisplaceCandidate> = Vec::new();
-    for w in wm.windows.values() {
-        if w.id() == moving || w.closed || w.minimized {
-            continue;
-        }
-        // A window moving WITH the drag is not in its way.
-        if group.iter().any(|&(g, _, _)| g == w.id()) {
-            continue;
-        }
-        if !matches!(w.state, crate::window::WindowState::Mapped) {
-            continue;
-        }
-        if w.is_status_bar() || w.is_wallpaper() || w.is_grid() {
-            continue;
-        }
-        let mode = wm.get_mode_for_window(w);
-        if mode != crate::tiling::TilingMode::Floating {
-            continue;
-        }
-        // Judge an already-displaced window at its ORIGINAL spot, not
-        // where it fled to.
-        let (ox, oy) = ledger
-            .iter()
-            .find(|&&(p, _, _)| p == w.id())
-            .map(|&(_, x, y)| (x, y))
-            .unwrap_or((w.virtual_x, w.virtual_y));
-        ids.push(w.id());
-        cands.push(crate::policy::overview::DisplaceCandidate {
-            x: ox,
-            y: oy,
-            w: w.box_geom.width as f64,
-            h: w.box_geom.height as f64,
-            tiled: false,
-        });
-    }
-    let moves = crate::policy::overview::displace(
-        moved, false, drag_delta, &cands, sp, sp.gap_width,
-    );
-
-    let mut changed = false;
-    let mut displaced_now: Vec<crate::window::WindowId> = Vec::new();
-    for &(idx, (nx, ny)) in &moves {
-        let id = ids[idx];
-        displaced_now.push(id);
-        if !ledger.iter().any(|&(p, _, _)| p == id) {
-            ledger.push((id, cands[idx].x, cands[idx].y));
-        }
-        let Some(w) = wm.windows.get_mut(id) else { continue };
-        if w.virtual_x != nx || w.virtual_y != ny {
-            w.virtual_x = nx;
-            w.virtual_y = ny;
-            changed = true;
-        }
-    }
-    // No longer covered at its original spot: back home.
-    ledger.retain(|&(id, ox, oy)| {
-        if displaced_now.contains(&id) {
-            return true;
-        }
-        let Some(w) = wm.windows.get_mut(id) else { return false };
-        if !w.closed && (w.virtual_x != ox || w.virtual_y != oy) {
-            w.virtual_x = ox;
-            w.virtual_y = oy;
-            changed = true;
-        }
-        false
-    });
-    if changed {
-        crate::shared::pending().dirty_windowing();
-    }
 }
 
 unsafe extern "C" fn handle_request_set_cursor(
