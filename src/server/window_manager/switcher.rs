@@ -87,7 +87,7 @@ impl WindowManager {
         if ordered.is_empty() {
             return;
         }
-        ordered.sort_by_key(|w| std::cmp::Reverse(if w.minimized { None } else { w.tree.stack_key() }));
+        ordered.sort_by_key(|w| std::cmp::Reverse(w.drawn_stack_key()));
         // cce-cloud opens with index 1 highlighted, the classic alt-tab
         // default when the focused window is first. It is not always first
         // here — a focused tiled window sits under every floating one — so

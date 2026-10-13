@@ -156,6 +156,14 @@ use ipc_commands::parse_finite;
 #[path = "window_manager/config_apply.rs"]
 mod config_apply;
 
+/// A focus-next/prev cycle under way (`WindowManager::focus_cycle`).
+pub struct FocusCycle {
+    /// The windows in the order the cycle walks, first entry first.
+    pub order: Vec<crate::window::WindowId>,
+    /// The window the last step focused.
+    pub landed: crate::window::WindowId,
+}
+
 pub struct WindowManager {
     /// The zcce_window_manager_v1 global; private, so only `init` sets it
     /// and `deinit` destroys it.
@@ -184,6 +192,15 @@ pub struct WindowManager {
     /// [`crate::selection`].
     pub selection: crate::selection::Selection,
     pub focus_history: Vec<crate::window::WindowId>,
+    /// The focus-next/prev cycle under way: the order it started from
+    /// (stacking order then, topmost first) and the window it last focused.
+    /// `focus_cycle_order` keeps handing the policy that order while the
+    /// focus is still where the cycle left it and the same windows are up;
+    /// anything else — a click, the switcher, a chord, a window opening or
+    /// closing — starts the next press from the stacking order afresh.
+    /// Every focus raises, so walking the live order would only ever trade
+    /// the top two windows.
+    pub focus_cycle: Option<FocusCycle>,
     pub scheduled: WindowManagerScheduled,
     pub rendering_requested: WindowManagerRenderingRequested,
     pub timeout: crate::event_source::Timer,
@@ -558,6 +575,7 @@ impl WindowManager {
         self.windows = crate::window::Windows::new();
         std::ptr::write(&mut self.selection, crate::selection::Selection::default());
         self.focus_history = Vec::new();
+        self.focus_cycle = None;
         self.scheduled = WindowManagerScheduled {
             output_config: std::ptr::null_mut(),
         };
@@ -870,6 +888,37 @@ impl WindowManager {
     /// Snapshot for `Policy::action`: seat- and scene-dependent facts
     /// (cursor output, hovered window, focus) resolved up front, the
     /// arrange-pass convention.
+    /// The order focus-next/prev walks, first entry first: the order the
+    /// cycle under way started from, while the focus is where it left off
+    /// and `cyclable` holds the same windows; otherwise the stacking order
+    /// as drawn, topmost first (`Window::drawn_stack_key`).
+    fn focus_cycle_order(&self, cyclable: &[crate::window::WindowId]) -> Vec<crate::window::WindowId> {
+        crate::wm_scope!();
+        if let Some(cycle) = &self.focus_cycle {
+            let same_windows = cycle.order.len() == cyclable.len() && cyclable.iter().all(|id| cycle.order.contains(id));
+            if same_windows && self.focused_window() == Some(cycle.landed) {
+                return cycle.order.clone();
+            }
+        }
+        let mut order = cyclable.to_vec();
+        order.sort_by_key(|&id| std::cmp::Reverse(self.windows.get(id).and_then(|w| w.drawn_stack_key())));
+        order
+    }
+
+    /// After a focus-next/prev: remember the order it walked (the ranks
+    /// `ctx` carried) and where it landed, so the next press continues the
+    /// same cycle (`focus_cycle_order`).
+    fn note_focus_cycle(&mut self, ctx: &crate::policy::api::ActionCtx) {
+        crate::wm_scope!(mut);
+        let mut ranked: Vec<(u32, crate::window::WindowId)> =
+            ctx.windows.iter().filter_map(|w| w.cycle_rank.map(|r| (r, w.id))).collect();
+        ranked.sort_by_key(|&(r, _)| r);
+        self.focus_cycle = self.focused_window().map(|landed| FocusCycle {
+            order: ranked.into_iter().map(|(_, id)| id).collect(),
+            landed,
+        });
+    }
+
     fn build_action_ctx(&mut self) -> crate::policy::api::ActionCtx {
         crate::wm_scope!(mut);
         use crate::policy::api::{ActionCtx, ActionWindow, Rect, WindowId};
@@ -971,8 +1020,16 @@ impl WindowManager {
                 pre_fullscreen: w.pre_fullscreen,
                 visible,
                 focus_cyclable,
+                cycle_rank: None,
                 overview_eligible,
             });
+        }
+
+        // FocusNext/FocusPrev walk this order (`ActionWindow::cycle_rank`).
+        let cyclable: Vec<WindowId> = windows.iter().filter(|w| w.focus_cyclable).map(|w| w.id).collect();
+        let order = self.focus_cycle_order(&cyclable);
+        for w in windows.iter_mut() {
+            w.cycle_rank = order.iter().position(|&o| o == w.id).map(|p| p as u32);
         }
 
         ActionCtx {
@@ -2385,6 +2442,9 @@ impl WindowManager {
             if !cmds.is_empty() {
                 for cmd in &cmds {
                     self.apply(cmd);
+                }
+                if matches!(action, Action::FocusNext | Action::FocusPrev) {
+                    self.note_focus_cycle(&ctx);
                 }
                 return;
             }

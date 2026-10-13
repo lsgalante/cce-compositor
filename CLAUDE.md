@@ -1880,7 +1880,17 @@ drawn rather than restating them — a floating window lists above a tiled
 one whatever the render list says. Minimized windows come last. The
 highlight opens on the window just beneath the focused one, so one
 Super+Tab still switches when a floating window sits over a focused tiled
-one. In a shadow: two `set-mode tiled` windows, an
+one. **`focus-next` / `focus-prev` walk the same order** (since 2026-10-13;
+they walked window ids, i.e. creation order): `build_action_ctx` hands the
+policy each window's `cycle_rank`, and `focus_cycle` steps one down (Next)
+or up (Prev). Every focus raises, so the live order would only trade the
+top two windows; `WindowManager::focus_cycle` keeps the order a cycle
+started from (`focus_cycle_order`, recorded by `note_focus_cycle`) while
+the focus is where the last step left it and the same windows are up, and
+any other focus change starts the next press from the stack afresh. In a
+shadow, F floating over T3, T2, T1 (created T1, T2, T3, F) cycles F, T3,
+T2, T1, F, and `focus-window T1` then `focus-next` goes to T3. In a
+shadow: two `set-mode tiled` windows, an
 overview drag of one onto the other (`pointer-press` / `pointer-move-to` /
 `pointer-release`), then `ctl windows` shows both on the same cells and
 the focused one with the higher `stack=`.

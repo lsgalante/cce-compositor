@@ -1358,6 +1358,17 @@ impl Window {
             || self.get_app_id_string().as_deref() == Some("cce-cloud")
     }
 
+    /// Where the scene draws this window, for ordering windows as they are
+    /// stacked on screen (greater is nearer the top): `Handle::stack_key`
+    /// of its tree. `None` for a minimized window, which is not drawn, and
+    /// one whose tree is gone. The switcher and focus-next/prev order by it.
+    pub fn drawn_stack_key(&self) -> Option<(u32, u32)> {
+        if self.minimized {
+            return None;
+        }
+        self.tree.stack_key()
+    }
+
     /// A "shy" X11 window: a top-level that declines input focus
     /// (WM_HINTS input = False) and asks to be skipped by the taskbar —
     /// what Wine emits for a WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW window.
