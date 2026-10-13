@@ -238,7 +238,7 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Twenty-two modules carry unit tests — `window_manager.rs` (the most of any, among
+Twenty-six modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
 `idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
@@ -254,7 +254,17 @@ the offsets `layout_probe.c` gets from the real headers),
 `keyboard_group.rs` (the keys a locked session keeps),
 `osk.rs` (a touch shows the keyboard once, and only while it is fresh),
 `event_source.rs` (a `Timer` fires once, disarms, and is removed on drop, on a
-real `wl_event_loop`) and
+real `wl_event_loop`),
+`listener.rs` (connecting twice links once and a drop unlinks, swapped owners
+leave both signal lists whole, a field route refuses an owner that moved while
+a keyed one records only its key, and a callback may free its own listener),
+`reentry.rs` (the scope depth nests and keeps the outermost method, and
+`wm_scope!` names its function),
+`scene_handle.rs` (a handle goes null when its node dies with its parent or
+by a raw destroy, dropping one takes its subtree, and `release` and `watch`
+leave the node alone, on a real `wlr_scene`),
+`shared.rs` (`IdList::move_to_back` reorders without duplicating, and the
+`sent()` lists start empty) and
 `sleep_lock.rs` (logind's sleep delay). They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
