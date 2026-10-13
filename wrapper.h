@@ -107,6 +107,7 @@ bool cce_dmabuf_check_install(struct wlr_linux_dmabuf_v1 *linux_dmabuf, int rend
 struct wlr_surface *river_scene_node_get_surface(struct wlr_scene_node *node);
 enum wlr_scene_node_type river_scene_node_get_type(struct wlr_scene_node *node);
 struct wlr_scene_tree *river_scene_node_get_parent(struct wlr_scene_node *node);
+int river_scene_node_sibling_index(struct wlr_scene_node *node);
 int river_scene_node_get_x(struct wlr_scene_node *node);
 int river_scene_node_get_y(struct wlr_scene_node *node);
 void *river_scene_node_get_data(struct wlr_scene_node *node);

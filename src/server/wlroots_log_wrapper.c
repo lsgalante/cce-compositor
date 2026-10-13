@@ -88,6 +88,23 @@ struct wlr_scene_tree *river_scene_node_get_parent(struct wlr_scene_node *node) 
 	return node->parent;
 }
 
+/* The node's place among its parent's children, counted from the bottom
+ * (the children list runs bottom to top), or -1 for a node with no parent. */
+int river_scene_node_sibling_index(struct wlr_scene_node *node) {
+	if (node->parent == NULL) {
+		return -1;
+	}
+	int index = 0;
+	struct wlr_scene_node *child;
+	wl_list_for_each(child, &node->parent->children, link) {
+		if (child == node) {
+			return index;
+		}
+		index++;
+	}
+	return -1;
+}
+
 int river_scene_node_get_x(struct wlr_scene_node *node) {
 	return node->x;
 }

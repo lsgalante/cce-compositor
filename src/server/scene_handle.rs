@@ -291,6 +291,33 @@ impl<K: Kind> Handle<K> {
         unsafe { ffi::river_scene_node_get_parent(n) }
     }
 
+    /// Where the scene draws this node, bottom first: its parent's place
+    /// among the parent's siblings (for a window tree, which layer it is
+    /// in), then its own place among its siblings. Two keys compare the way
+    /// the scene stacks the two nodes when both parents hang under one tree
+    /// — every scene layer does. `None` when the node is gone or has no
+    /// grandparent.
+    pub fn stack_key(&self) -> Option<(u32, u32)> {
+        let n = self.node();
+        if n.is_null() {
+            return None;
+        }
+        // SAFETY: a non-null `node()` is a live node (see `destroy`), and
+        // so is the tree it hangs under; a tree's node is its first field,
+        // the cast `get_parent_position_relative_to` makes too.
+        let (own, layer) = unsafe {
+            let parent = ffi::river_scene_node_get_parent(n);
+            if parent.is_null() {
+                return None;
+            }
+            (
+                ffi::river_scene_node_sibling_index(n),
+                ffi::river_scene_node_sibling_index(parent as *mut ffi::wlr_scene_node),
+            )
+        };
+        (own >= 0 && layer >= 0).then_some((layer as u32, own as u32))
+    }
+
     /// Call `f` on every buffer node under this one (itself included), with
     /// its position relative to this node, in wlroots' order. Does nothing
     /// if the node is gone. Each buffer `f` gets is live for that call.

@@ -24,8 +24,9 @@ impl WindowManager {
     }
 
     /// Open the alt-tab window switcher: spawn a `cce-cloud --switcher` overlay,
-    /// feed it the currently switchable windows in most-recently-used order, and
-    /// hand off to a background thread that focuses whatever the user commits to.
+    /// feed it the currently switchable windows in stacking order, topmost
+    /// first, and hand off to a background thread that focuses whatever the
+    /// user commits to.
     ///
     /// cce-cloud is a `Layer::Overlay` surface with exclusive keyboard focus,
     /// and it commits on Super release / cancels on Escape by itself. Tab while
@@ -36,8 +37,8 @@ impl WindowManager {
     /// stdout; we only build the list and map the selection back to a window id.
     ///
     /// `backwards` is the super+shift+tab direction: it cycles the highlight
-    /// the other way, and opening with it lands on the least-recently-used
-    /// window instead of the previously focused one.
+    /// the other way, and opening with it lands on the bottom-most window
+    /// instead of the one beneath the focused one.
     pub fn launch_window_switcher(&mut self, backwards: bool) {
         crate::wm_scope!(mut);
         let cycle_line: &[u8] = if backwards {
@@ -65,9 +66,13 @@ impl WindowManager {
                 *active = None;
             }
         }
-        // Most-recently-used order (focus_history is MRU-front). The focused
-        // window lands first, so cce-cloud auto-selects index 1 — the previously
-        // focused window — which is the classic alt-tab default.
+        // Stacking order, topmost first: the order the scene draws them in
+        // (`stack_key`: the window's layer, then its place in it), so every
+        // rule the reorder pass applies — floating over tiled, a fullscreen
+        // window on top or stepped aside behind the desk — shows as drawn.
+        // Until 2026-10-13 this was most-recently-used order. A minimized
+        // window is not drawn, so those come last; ties and the minimized
+        // keep most-recently-used order (the stable sort over the MRU list).
         let mut ordered: Vec<&Window> = Vec::new();
         for w in self.focus_history.iter().filter_map(|&id| self.windows.get(id)) {
             if self.is_switchable_window(w) && !ordered.iter().any(|o| std::ptr::eq(*o, w)) {
@@ -82,6 +87,15 @@ impl WindowManager {
         if ordered.is_empty() {
             return;
         }
+        ordered.sort_by_key(|w| std::cmp::Reverse(if w.minimized { None } else { w.tree.stack_key() }));
+        // cce-cloud opens with index 1 highlighted, the classic alt-tab
+        // default when the focused window is first. It is not always first
+        // here — a focused tiled window sits under every floating one — so
+        // step the highlight on to the window just beneath it, keeping one
+        // super+tab a switch rather than a pick of the window already
+        // focused (wrapping when the focused window is at the bottom).
+        let focused = self.focused_window();
+        let focused_at = ordered.iter().position(|w| Some(w.id()) == focused).unwrap_or(0);
 
         // cce-cloud echoes the committed entry back verbatim, so keep the mapping
         // from display string to window id to resolve the selection.
@@ -103,8 +117,12 @@ impl WindowManager {
         if backwards {
             // cce-cloud auto-highlights index 1 once the items land; two prev
             // steps from there wrap to the last entry, so a backwards open
-            // starts on the least-recently-used window (classic alt+shift+tab).
+            // starts on the bottom-most window (classic alt+shift+tab).
             input.push_str("__cce_switcher_prev__\n__cce_switcher_prev__\n");
+        } else {
+            for _ in 0..focused_at {
+                input.push_str("__cce_switcher_next__\n");
+            }
         }
 
         // Position near the top-centre of the enabled output. Passing explicit

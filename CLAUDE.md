@@ -1871,7 +1871,16 @@ drops the position, so a window the user raises mid-login stays over the
 late arrivals. Until then a restore stacked in map order, the last app up
 on top, even over the focused window. Verified in a shadow by saving C, A,
 B bottom-up and restarting with `cce-shadow start --restore`: the apps map
-A, B, C and come back C, A, B. In a shadow: two `set-mode tiled` windows, an
+A, B, C and come back C, A, B. **The Super+Tab switcher lists windows in
+stacking order**, topmost first (since 2026-10-13; it was most recently
+used): `launch_window_switcher` sorts by `Handle::stack_key`, the window
+tree's layer and its place in it read straight from the scene
+(`river_scene_node_sibling_index`), so it shows every reorder-pass rule as
+drawn rather than restating them — a floating window lists above a tiled
+one whatever the render list says. Minimized windows come last. The
+highlight opens on the window just beneath the focused one, so one
+Super+Tab still switches when a floating window sits over a focused tiled
+one. In a shadow: two `set-mode tiled` windows, an
 overview drag of one onto the other (`pointer-press` / `pointer-move-to` /
 `pointer-release`), then `ctl windows` shows both on the same cells and
 the focused one with the higher `stack=`.
