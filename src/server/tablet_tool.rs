@@ -13,7 +13,10 @@ pub enum TabletToolMode {
 }
 
 pub struct TabletTool {
-    pub wp_tool: *mut ffi::wlr_tablet_v2_tablet_tool,
+    /// wlroots' tablet-v2 tool, live as long as this: wlroots destroys it
+    /// on the same `wlr_tablet_tool` destroy that frees this. Private,
+    /// because every method hands it to wlroots.
+    wp_tool: *mut ffi::wlr_tablet_v2_tablet_tool,
     wlr_cursor: crate::wlr::Wlr<ffi::wlr_cursor>,
     /// The tool's own theme for `wlr_cursor`'s pencil: the cursor keeps the
     /// manager it was last given, and the seat's dies with the seat (a
@@ -160,16 +163,16 @@ impl TabletTool {
     /// # Safety
     /// `tablet` must point to a live `Tablet` whose `device` is live.
     pub unsafe fn attach(&mut self, tablet: *mut Tablet) {
-        let dev = (*(*tablet).device).wlr_device;
+        let dev = (*(*tablet).device).wlr_device();
         ffi::wlr_cursor_attach_input_device(self.wlr_cursor().ptr(), dev);
-        ffi::wlr_cursor_map_input_to_output(self.wlr_cursor().ptr(), dev, (*(*tablet).device).config.map_to_output);
+        ffi::wlr_cursor_map_input_to_output(self.wlr_cursor().ptr(), dev, (*(*tablet).device).config.map_to_output());
         ffi::wlr_cursor_map_input_to_region(self.wlr_cursor().ptr(), dev, &mut (*(*tablet).device).config.map_to_rectangle as *mut _);
     }
 
     /// # Safety
     /// As [`attach`](Self::attach).
     pub unsafe fn detach(&mut self, tablet: *mut Tablet) {
-        let dev = (*(*tablet).device).wlr_device;
+        let dev = (*(*tablet).device).wlr_device();
         ffi::wlr_cursor_detach_input_device(self.wlr_cursor().ptr(), dev);
     }
 
@@ -197,11 +200,11 @@ impl TabletTool {
                 ffi::wlr_tablet_tool_type_WLR_TABLET_TOOL_TYPE_TOTEM => {
                     let warp_x = if has_x { (*event).x } else { f64::NAN };
                     let warp_y = if has_y { (*event).y } else { f64::NAN };
-                    ffi::wlr_cursor_warp_absolute(self.wlr_cursor().ptr(), (*(*tablet).device).wlr_device, warp_x, warp_y);
+                    ffi::wlr_cursor_warp_absolute(self.wlr_cursor().ptr(), (*(*tablet).device).wlr_device(), warp_x, warp_y);
                 }
                 ffi::wlr_tablet_tool_type_WLR_TABLET_TOOL_TYPE_LENS |
                 ffi::wlr_tablet_tool_type_WLR_TABLET_TOOL_TYPE_MOUSE => {
-                    ffi::wlr_cursor_move(self.wlr_cursor().ptr(), (*(*tablet).device).wlr_device, (*event).dx, (*event).dy);
+                    ffi::wlr_cursor_move(self.wlr_cursor().ptr(), (*(*tablet).device).wlr_device(), (*event).dx, (*event).dy);
                 }
                 _ => {}
             }
@@ -272,7 +275,7 @@ impl TabletTool {
 
             ffi::wlr_cursor_warp_absolute(
                 self.wlr_cursor().ptr(),
-                (*(*tablet).device).wlr_device,
+                (*(*tablet).device).wlr_device(),
                 (*event).x,
                 (*event).y,
             );

@@ -1,5 +1,5 @@
 use crate::ffi;
-use crate::seat::{Seat, Focus};
+use crate::seat::Focus;
 use crate::scene_node_data::SceneNodeDataVal;
 use std::collections::{HashMap, HashSet};
 
@@ -353,18 +353,23 @@ impl Cursor {
         &self.xcursor_manager
     }
 
+    /// Set the cursor up for seat `sid`, whose `wlr_seat` it holds too.
+    /// The seat's parts are handed in, not the seat: this cursor is a field
+    /// of it, so reading them through the seat would overlap `self`.
+    ///
     /// # Safety
-    /// `seat` is the live seat holding this cursor, already in its store
-    /// (`id` and `wlr_seat` set), and `output_layout` is live. The cursor
-    /// holds that `wlr_seat` until [`deinit`](Self::deinit), which must run
-    /// before `wlr_seat_destroy` (as `Seat::destroy` does).
+    /// `wlr_seat` is the live `wlr_seat` of seat `sid`, and `output_layout`
+    /// is live. The cursor holds that `wlr_seat` until
+    /// [`deinit`](Self::deinit), which must run before `wlr_seat_destroy`
+    /// (as `Seat::destroy` does).
     pub unsafe fn init(
         &mut self,
-        seat: *mut Seat,
+        sid: crate::seat::SeatId,
+        wlr_seat: *mut ffi::wlr_seat,
         output_layout: *mut ffi::wlr_output_layout,
     ) -> Result<(), &'static str> {
         // First, so even a failed init leaves the cursor naming its seat.
-        self.sid = (*seat).id;
+        self.sid = sid;
         let wlr_cursor = ffi::wlr_cursor_create();
         if wlr_cursor.is_null() {
             return Err("Failed to create wlr_cursor");
@@ -380,7 +385,7 @@ impl Cursor {
         self.wlr_cursor().set(wlr_cursor);
         // Released in `deinit`, which `Seat::destroy` runs before it
         // destroys the `wlr_seat`.
-        self.wlr_seat().set((*seat).wlr_seat().ptr());
+        self.wlr_seat().set(wlr_seat);
         self.xcursor_manager().set(xcursor_manager);
 
         // The animated-cursor driver. Created disarmed; `set_xcursor` arms it
@@ -1594,7 +1599,7 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::seat::Seat::handle_activity(wm, sid, sys);
 
-    let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
+    let tablet = (*device).tablet();
     if tablet.is_null() {
         return;
     }
@@ -1623,7 +1628,7 @@ unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listene
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::seat::Seat::handle_activity(wm, sid, sys);
 
-    let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
+    let tablet = (*device).tablet();
     if tablet.is_null() {
         return;
     }
@@ -1649,7 +1654,7 @@ unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, dat
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::seat::Seat::handle_activity(wm, sid, sys);
 
-    let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
+    let tablet = (*device).tablet();
     if tablet.is_null() {
         return;
     }
@@ -1675,7 +1680,7 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::seat::Seat::handle_activity(wm, sid, sys);
 
-    let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
+    let tablet = (*device).tablet();
     if tablet.is_null() {
         return;
     }

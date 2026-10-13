@@ -271,7 +271,7 @@ impl Seat {
 
         // Initialize Cursor
         let output_layout = crate::shared::handles().output_layout.ptr();
-        (*seat).cursor.init(seat, output_layout)?;
+        (*seat).cursor.init(id, wlr_seat, output_layout)?;
 
         // Keyed by the seat id, as the cursor's and relay's are: the store
         // hands seats out as `&mut`, so a seat may move.
@@ -308,7 +308,7 @@ impl Seat {
         if !(*seat).synthetic_keyboard.is_null() {
             let group = (*seat).synthetic_keyboard;
             (*seat).synthetic_keyboard = std::ptr::null_mut();
-            (*group).unref(seat, &[]);
+            crate::keyboard_group::KeyboardGroup::unref(group, seat);
         }
 
         // Every keyboard group is gone: devices left at the request
@@ -382,10 +382,10 @@ impl Seat {
     /// null or a live output.
     pub unsafe fn attach_device(&mut self, device: *mut crate::input_device::InputDevice) {
         (*device).sid = Some(self.id);
-        let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
+        let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device());
         match dev_type {
             ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD => {
-                let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
+                let keyboard = (*device).keyboard();
                 if !keyboard.is_null() {
                     (*keyboard).set_group(self);
                     if !(*keyboard).group.is_null() {
@@ -398,17 +398,17 @@ impl Seat {
                 }
             }
             ffi::wlr_input_device_type_WLR_INPUT_DEVICE_POINTER => {
-                ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor().ptr(), (*device).wlr_device);
+                ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor().ptr(), (*device).wlr_device());
             }
             ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH | ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET => {
                 if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH {
                     self.touch_devices += 1;
                 }
-                ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor().ptr(), (*device).wlr_device);
-                if !(*device).config.map_to_output.is_null() {
-                    ffi::wlr_cursor_map_input_to_output(self.cursor.wlr_cursor().ptr(), (*device).wlr_device, (*device).config.map_to_output);
+                ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor().ptr(), (*device).wlr_device());
+                if !(*device).config.map_to_output().is_null() {
+                    ffi::wlr_cursor_map_input_to_output(self.cursor.wlr_cursor().ptr(), (*device).wlr_device(), (*device).config.map_to_output());
                 }
-                ffi::wlr_cursor_map_input_to_region(self.cursor.wlr_cursor().ptr(), (*device).wlr_device, &(*device).config.map_to_rectangle);
+                ffi::wlr_cursor_map_input_to_region(self.cursor.wlr_cursor().ptr(), (*device).wlr_device(), &(*device).config.map_to_rectangle);
             }
             _ => {}
         }
@@ -421,9 +421,9 @@ impl Seat {
     /// `Keyboard`, whose `group` is null or live (and this seat's).
     pub unsafe fn detach_device(wm: &mut crate::window_manager::WindowManager, sid: SeatId, device: *mut crate::input_device::InputDevice, sys: &mut crate::ctx::Sys) {
         let this = seat_mut!(wm, sid);
-        ffi::wlr_cursor_detach_input_device(this.cursor.wlr_cursor().ptr(), (*device).wlr_device);
+        ffi::wlr_cursor_detach_input_device(this.cursor.wlr_cursor().ptr(), (*device).wlr_device());
 
-        let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
+        let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device());
         if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH {
             this.touch_devices = this.touch_devices.saturating_sub(1);
             // An unplugged touchscreen sends no up for the fingers it had
@@ -436,13 +436,14 @@ impl Seat {
             }
         }
         if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
-            let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
-            if !keyboard.is_null() && !(*keyboard).group.is_null() {
-                let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
-                (*(*keyboard).group).unregister_keyboard(keyboard);
+            let keyboard = (*device).keyboard();
+            if !keyboard.is_null() {
+                // Its keys are forgotten, not released: a release runs the
+                // group's key handler, which takes the window manager this
+                // function holds. A caller that should release them does it
+                // first, from its entry point (`InputDevice::release_keys`).
                 let seat: *mut Seat = seat_mut!(wm, sid);
-                (*(*keyboard).group).unref(seat, &keys);
-                (*keyboard).group = std::ptr::null_mut();
+                crate::keyboard::Keyboard::leave_group(keyboard, seat);
             }
         }
         let this = seat_mut!(wm, sid);

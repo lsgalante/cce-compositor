@@ -5,7 +5,8 @@ use crate::ffi;
 use crate::server::Server;
 
 pub struct LibinputConfig {
-    pub global: *mut ffi::wl_global,
+    /// Private: `deinit` destroys it.
+    global: *mut ffi::wl_global,
     /// Private registries: walks trust that what is registered is live
     /// (each unregisters before it is freed).
     objects: crate::registry::Registry<LibinputConfigObject>,

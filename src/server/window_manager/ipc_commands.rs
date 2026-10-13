@@ -1337,7 +1337,7 @@ impl WindowManager {
                             // (`InputManager::devices`), and so is its wlroots
                             // device and the name it owns.
                             let device = unsafe { &mut *device };
-                            let name_ptr = unsafe { ffi::river_wlr_input_device_get_name(device.wlr_device) };
+                            let name_ptr = unsafe { ffi::river_wlr_input_device_get_name(device.wlr_device()) };
                             if !name_ptr.is_null() {
                                 let name = unsafe { std::ffi::CStr::from_ptr(name_ptr) }.to_string_lossy();
                                 if device_name == "*" || name.contains(device_name) {

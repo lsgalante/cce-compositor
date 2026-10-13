@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# key-release-test — a key held on a keyboard that leaves its seat is let go
+# exactly once, and a held key cannot wedge a teardown.
+#
+# Since 2026-10-13 a keyboard group's `unref` releases nothing: a keyboard
+# leaving its group has its keys released first, from the entry point,
+# before the window manager is borrowed (`Keyboard::release_pressed`,
+# `InputDevice::release_keys`). Before, `Seat::detach_device` and the config
+# reload fed them through the group's key handler, which took the window
+# manager and the subsystems again under their own borrows. The release is
+# what a client sees, so this checks it still happens on each path a
+# headless session can reach that takes a keyboard off its seat:
+#
+#   1. river_input_manager_v1.destroy_seat with a key held on a virtual
+#      keyboard bound to that seat (`input_manager_destroy_seat`)
+#   2. the virtual keyboard's client destroying it with the key held
+#      (wlroots releases it in `wlr_keyboard_finish`, before the destroy
+#      handler, which then finds nothing left)
+#   3. the compositor exiting with a key held on the default seat: deinit
+#      drops it unreleased, and must still finish
+#
+# The key is `a`, bound as a portal shortcut (`ccectl shortcut bind`), so its
+# press and release show as `activated` / `deactivated` lines on the status
+# socket's `shortcuts` topic, whichever seat the keyboard is on.
+#
+# Not reachable here: hardware keyboards (a config reload's repeat change,
+# `input_device.assign_to_seat`), which a headless backend has none of.
+#
+# Extra args go to `cce-shadow start`; `--bin path/to/cce-fx` pins a build.
+
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(dirname "$here")
+shadow="$repo/scripts/cce-shadow"
+out=$(mktemp -d)
+inst=""
+log=""
+
+cleanup() {
+    jobs -p | xargs -r kill 2>/dev/null || true
+    [ -n "$inst" ] && "$shadow" --instance "$inst" stop >/dev/null 2>&1 || true
+    rm -rf "$out"
+}
+trap cleanup EXIT
+
+fail() {
+    echo "FAIL: $*" >&2
+    echo "--- shortcuts topic ---" >&2
+    cat "$out/shortcuts.log" >&2 || true
+    for f in "$out"/case*.log; do
+        [ -f "$f" ] && { echo "--- $(basename "$f") ---" >&2; cat "$f" >&2; }
+    done
+    echo "--- compositor log tail ---" >&2
+    [ -n "$log" ] && tail -30 "$log" >&2 || true
+    exit 1
+}
+
+echo "==> building test clients"
+cargo build --quiet --manifest-path "$here/clients/Cargo.toml"
+bin="$here/clients/target/debug"
+
+echo "==> starting shadow instance"
+inst=$("$shadow" start --new "$@" 2>&1 | sed -n "s/.*claimed instance '\([^']*\)'.*/\1/p")
+[ -n "$inst" ] || fail "could not claim a shadow instance"
+sc() { "$shadow" --instance "$inst" "$@"; }
+log=$(sc status | awk '$1 == "log" { print $2 }')
+
+count() { grep -c "^$1 /s/1 probe " "$out/shortcuts.log" 2>/dev/null || true; }
+# A predicate for wait_for: a function, so the loop re-reads the log.
+counts_are() { [ "$(count activated)" = "$1" ] && [ "$(count deactivated)" = "$2" ]; }
+stopped() { sc status | grep -q '^stopped'; }
+
+wait_for() { # <description> <timeout-seconds> <predicate...>
+    local desc=$1 timeout=$2 i=0
+    shift 2
+    until "$@"; do
+        i=$((i + 1))
+        [ "$i" -ge $((timeout * 5)) ] && fail "timed out waiting for $desc"
+        sleep 0.2
+    done
+}
+
+echo "==> binding a as a portal shortcut and subscribing to its edges"
+reply=$(sc ctl shortcut bind /s/1 probe a)
+case "$reply" in ok*) ;; *) fail "shortcut bind: $reply" ;; esac
+sc run python3 -u -c '
+import os, socket
+s = socket.socket(socket.AF_UNIX)
+s.connect("/tmp/cce-status-interface-%s.sock" % os.environ["WAYLAND_DISPLAY"])
+s.sendall(b"shortcuts\n")
+for line in s.makefile():
+    print(line, end="")
+' >"$out/shortcuts.log" 2>&1 &
+sleep 0.5
+
+echo "==> 1: destroy_seat with a key held on a keyboard bound to it"
+sc run "$bin/seat-cycle" create t1 bind t1 kbd t1 press t1 30 destroy t1 sleep 300 >"$out/case1.log" 2>&1 \
+    || fail "seat-cycle exited non-zero"
+wait_for "the press and its release" 5 counts_are 1 1
+grep -q '^seats: default (globals removed: 1)' "$out/case1.log" || fail "seat t1 was not destroyed"
+
+echo "==> 2: the keyboard's client destroys it with the key held"
+sc run "$bin/seat-cycle" create t2 bind t2 kbd t2 press t2 30 drop t2 sleep 300 >"$out/case2.log" 2>&1 \
+    || fail "seat-cycle exited non-zero"
+wait_for "the second press and its release" 5 counts_are 2 2
+
+echo "==> 3: the compositor exits with a key held on the default seat"
+sc run "$bin/seat-cycle" bind default kbd default press default 30 sleep 30000 >"$out/case3.log" 2>&1 &
+wait_for "the third press" 5 counts_are 3 2
+sc ctl exit force >/dev/null || true
+wait_for "the compositor to exit" 10 stopped
+grep -q 'InputManager::deinit finished' "$log" || fail "deinit did not finish"
+if grep -qE 'panicked|misrouted|owner moved or is gone' "$log"; then
+    fail "the compositor log reports a panic or a misrouted listener"
+fi
+
+echo "PASS: held keys are released as their keyboard leaves its seat, and a held key does not stop an exit"

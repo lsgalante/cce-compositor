@@ -8,7 +8,9 @@ pub struct InputPopup {
     /// The seat whose relay the popup belongs to. An id, not a relay
     /// pointer: the relay lives inside its seat, which may move.
     pub sid: crate::seat::SeatId,
-    pub wlr_popup: *mut ffi::wlr_input_popup_surface_v2,
+    /// Live until the popup's destroy handler frees this. Private, because
+    /// the handlers and `update` dereference it.
+    wlr_popup: *mut ffi::wlr_input_popup_surface_v2,
     /// Watched: wlroots destroys it with the popup surface.
     pub surface_tree: crate::scene_handle::SceneTree,
 

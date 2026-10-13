@@ -5,8 +5,11 @@ use crate::ffi;
 use crate::input_device::InputDevice;
 
 pub struct LibinputDevice {
-    pub parent_device: *mut InputDevice,
-    pub libinput: *mut ffi::libinput_device,
+    /// The device this configures, and its libinput handle: both live until
+    /// the device's destroy handler runs `deinit`. Private, because every
+    /// request handler dereferences them.
+    parent_device: *mut InputDevice,
+    libinput: *mut ffi::libinput_device,
     /// Its protocol objects (one per bound client). Private: walks trust
     /// that a registered object is live; `deinit` lets go of them all.
     objects: crate::registry::Registry<LibinputDeviceObject>,
@@ -87,7 +90,7 @@ impl LibinputDevice {
         // Device class: trackpoint by name, touchpad by tap capability,
         // mouse otherwise. Per-class config blocks override the top-level
         // values for devices of that class.
-        let name_ptr = ffi::river_wlr_input_device_get_name((*self.parent_device).wlr_device);
+        let name_ptr = ffi::river_wlr_input_device_get_name((*self.parent_device).wlr_device());
         let name = if !name_ptr.is_null() {
             std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().to_lowercase()
         } else {

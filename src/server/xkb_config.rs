@@ -5,9 +5,12 @@ use crate::ffi;
 use crate::server::Server;
 
 pub struct XkbConfig {
-    pub global: *mut ffi::wl_global,
-    pub context: *mut ffi::xkb_context,
-    pub default_keymap: *mut ffi::xkb_keymap,
+    /// Private, as everything unsafe code trusts is: `deinit` destroys and
+    /// unrefs what these hold, and the default keymap is shared with every
+    /// keyboard through `shared::handles()`.
+    global: *mut ffi::wl_global,
+    context: *mut ffi::xkb_context,
+    default_keymap: *mut ffi::xkb_keymap,
     /// Private registries: walks trust that what is registered is live
     /// (each unregisters before it is freed).
     objects: crate::registry::Registry<XkbConfigObject>,

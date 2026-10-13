@@ -30,7 +30,11 @@ pub struct KeyboardGroup {
     /// `unref`'s teardown is handed the seat by its caller.
     pub sid: Option<crate::seat::SeatId>,
     pub virtual_device: bool,
-    pub config: KeyboardConfig,
+    /// What the group is keyed by. Private: the group holds a reference on
+    /// `config.keymap`, which `send_state` and the xkb protocol handlers
+    /// hand to xkbcommon; read it with `keymap()`, replace it with
+    /// `replace_keymap`.
+    config: KeyboardConfig,
     /// The group's own keyboard. Private: `match_chord` trusts its
     /// `xkb_state` (null, or the state wlroots made for the keymap it was
     /// last given), so only `wlr_keyboard_set_keymap` through
@@ -76,6 +80,30 @@ impl KeyboardGroup {
     /// The group keyboard's current modifier state.
     pub fn modifiers(&self) -> ffi::wlr_keyboard_modifiers {
         self.wlr_keyboard.modifiers
+    }
+
+    /// The group's keymap (it holds a reference), or null.
+    pub fn keymap(&self) -> *mut ffi::xkb_keymap {
+        self.config.keymap
+    }
+
+    /// Give a virtual keyboard's private group the keymap its client sent,
+    /// in place of its own: groups of virtual keyboards are never shared
+    /// (`Keyboard::set_group`), so nothing else is keyed by the old one.
+    ///
+    /// # Safety
+    /// As `process_keymap`, which this runs; `keymap` is null or live.
+    pub unsafe fn replace_keymap(this: *mut Self, keymap: *mut ffi::xkb_keymap) {
+        if !keymap.is_null() {
+            ffi::xkb_keymap_ref(keymap);
+        }
+        if !(*this).config.keymap.is_null() {
+            ffi::xkb_keymap_unref((*this).config.keymap);
+        }
+        (*this).config.keymap = keymap;
+        if !keymap.is_null() {
+            Self::process_keymap(this, keymap);
+        }
     }
 
     /// The group's `wlr_keyboard`, for wlroots calls.
@@ -146,22 +174,24 @@ impl KeyboardGroup {
     /// active keyboard over on: wlroots then clears it from the seat as the
     /// keyboard finishes).
     ///
+    /// It releases no keys, so it never runs the group's handlers: a
+    /// keyboard leaving the group lets go of its keys first, from where the
+    /// key handler may run (`Keyboard::release_pressed`), and the group's
+    /// listeners are gone before `wlr_keyboard_finish` releases whatever
+    /// its keyboard still holds. Until 2026-10-13 this took the keys to
+    /// release and fed them through `process_key`, which ran
+    /// `handle_group_key` — and it, the window manager and the subsystems
+    /// afresh — from inside `Seat::detach_device` and the config reload,
+    /// which held them.
+    ///
     /// # Safety
-    /// `seat` is null or live, and no reference to a seat is live: the last
-    /// unref takes the group out of every seat's registry by place.
-    pub unsafe fn unref(&mut self, seat: *mut Seat, to_release: &[u32]) {
-        for &keycode in to_release {
-            let event = ffi::wlr_keyboard_key_event {
-                time_msec: crate::util::msec_timestamp(),
-                keycode,
-                update_state: true,
-                state: ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED,
-            };
-            self.process_key(&event);
-        }
-
-        self.ref_count -= 1;
-        if self.ref_count > 0 {
+    /// `this` is a live group and no reference to it is live: the last
+    /// unref frees it. `seat` is null or live, and no reference to a seat
+    /// is live: the last unref takes the group out of every seat's registry
+    /// by place.
+    pub unsafe fn unref(this: *mut Self, seat: *mut Seat) {
+        (*this).ref_count -= 1;
+        if (*this).ref_count > 0 {
             return;
         }
 
@@ -170,26 +200,43 @@ impl KeyboardGroup {
         // seats' contents. Found without the window manager, which device
         // teardown may be inside.
         for place in crate::seat::live_places() {
-            (*place).unregister_keyboard_group(self);
+            (*place).unregister_keyboard_group(this);
         }
-        self.key_listener.disconnect();
-        self.modifiers_listener.disconnect();
+        (*this).key_listener.disconnect();
+        (*this).modifiers_listener.disconnect();
 
         // If the currently active keyboard of a seat is destroyed, we need to set a new active keyboard.
-        if !seat.is_null() && std::ptr::eq((*seat).wlr_seat().keyboard(), &self.wlr_keyboard) {
+        let wlr_keyboard = std::ptr::addr_of_mut!((*this).wlr_keyboard);
+        if !seat.is_null() && std::ptr::eq((*seat).wlr_seat().keyboard(), wlr_keyboard) {
             match (*seat).keyboard_groups().first() {
                 Some(&other_group) => ffi::wlr_seat_set_keyboard((*seat).wlr_seat().ptr(), &mut (*other_group).wlr_keyboard),
                 None => ffi::wlr_seat_set_keyboard((*seat).wlr_seat().ptr(), std::ptr::null_mut()),
             }
         }
 
-        ffi::wlr_keyboard_finish(&mut self.wlr_keyboard);
+        ffi::wlr_keyboard_finish(wlr_keyboard);
 
-        if !self.config.keymap.is_null() {
-            ffi::xkb_keymap_unref(self.config.keymap);
+        if !(*this).config.keymap.is_null() {
+            ffi::xkb_keymap_unref((*this).config.keymap);
         }
 
-        let _boxed = Box::from_raw(self);
+        drop(Box::from_raw(this));
+    }
+
+    /// Change the group's repeat rate and delay in place, for a config
+    /// reload that gives every member the same new values
+    /// (`WindowManager::apply_key_repeat`). Runs none of the compositor's
+    /// handlers: wlroots tells the seat's clients and the input method.
+    ///
+    /// # Safety
+    /// `this` is a live group.
+    pub unsafe fn set_repeat_info(this: *mut Self, rate: i32, delay: i32) {
+        if (*this).config.repeat_rate == rate && (*this).config.repeat_delay == delay {
+            return;
+        }
+        (*this).config.repeat_rate = rate;
+        (*this).config.repeat_delay = delay;
+        ffi::wlr_keyboard_set_repeat_info(std::ptr::addr_of_mut!((*this).wlr_keyboard), rate, delay);
     }
 
     /// # Safety
@@ -236,47 +283,57 @@ impl KeyboardGroup {
         matched
     }
 
+    /// Feed a member keyboard's key event to the group keyboard, counting
+    /// presses across the group's keyboards: only the first press and the
+    /// last release of a key reach it.
+    ///
+    /// The process_* functions take the group by pointer, not `&mut self`:
+    /// what they hand wlroots makes it emit the group keyboard's key or
+    /// modifiers signal, whose handlers (`handle_group_key`,
+    /// `handle_group_modifiers`) borrow this same group afresh through
+    /// their listener, and `led_update` reads it. No reference to the group
+    /// may be live across that.
+    ///
     /// # Safety
-    /// `event` must point to a valid key event. This emits the group's key
-    /// signal, whose handler takes the window manager and the server's
-    /// subsystems: no reference into them may be live.
-    pub unsafe fn process_key(&mut self, event: *const ffi::wlr_keyboard_key_event) {
-        if let Some(key) = self.pressed.get_mut(&(*event).keycode) {
+    /// `this` is a live group and nothing holds a reference to it, to the
+    /// window manager or to a `Sys`'s subsystems: a key that reaches the
+    /// group keyboard runs `handle_group_key`, an entry point that takes
+    /// them all.
+    pub unsafe fn process_key(this: *mut Self, event: *const ffi::wlr_keyboard_key_event) {
+        let keycode = (*event).keycode;
+        let pressed = (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED;
+        // Decided with the press map borrowed, which ends before wlroots runs
+        // the handler that changes it.
+        let notify = if let Some(key) = (*this).pressed.get_mut(&keycode) {
             assert!(key.count > 0);
-            if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
+            if pressed {
                 key.count += 1;
+                None
             } else {
                 key.count -= 1;
-                if key.count == 0 {
-                    let mut key_event = ffi::wlr_keyboard_key_event {
-                        time_msec: (*event).time_msec,
-                        keycode: (*event).keycode,
-                        update_state: true,
-                        state: ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED,
-                    };
-                    ffi::wlr_keyboard_notify_key(&mut self.wlr_keyboard, &mut key_event);
-                }
+                (key.count == 0).then_some(ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED)
             }
-        } else if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
-            && self.pressed.len() < 32
-        {
+        } else if pressed && (*this).pressed.len() < 32 {
+            Some(ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED)
+        } else {
+            None
+        };
+        if let Some(state) = notify {
             let mut key_event = ffi::wlr_keyboard_key_event {
                 time_msec: (*event).time_msec,
-                keycode: (*event).keycode,
+                keycode,
                 update_state: true,
-                state: ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED,
+                state,
             };
-            ffi::wlr_keyboard_notify_key(&mut self.wlr_keyboard, &mut key_event);
+            ffi::wlr_keyboard_notify_key(std::ptr::addr_of_mut!((*this).wlr_keyboard), &mut key_event);
         }
     }
 
     /// # Safety
-    /// This emits the group's modifiers signal, whose handler takes the
-    /// window manager and reads the server's xkb config: no reference into
-    /// either may be live.
-    pub unsafe fn process_modifiers(&mut self, modifiers: ffi::wlr_keyboard_modifiers) {
+    /// As `process_key`: this runs `handle_group_modifiers`.
+    pub unsafe fn process_modifiers(this: *mut Self, modifiers: ffi::wlr_keyboard_modifiers) {
         ffi::wlr_keyboard_notify_modifiers(
-            &mut self.wlr_keyboard,
+            std::ptr::addr_of_mut!((*this).wlr_keyboard),
             modifiers.depressed,
             modifiers.latched,
             modifiers.locked,
@@ -285,10 +342,11 @@ impl KeyboardGroup {
     }
 
     /// # Safety
-    /// `keymap` must be a live `xkb_keymap` (wlroots takes its own
-    /// reference).
-    pub unsafe fn process_keymap(&mut self, keymap: *mut ffi::xkb_keymap) {
-        ffi::wlr_keyboard_set_keymap(&mut self.wlr_keyboard, keymap);
+    /// As `process_key`: a new keymap updates the modifiers, which runs
+    /// `handle_group_modifiers`. `keymap` must be a live `xkb_keymap`
+    /// (wlroots takes its own reference).
+    pub unsafe fn process_keymap(this: *mut Self, keymap: *mut ffi::xkb_keymap) {
+        ffi::wlr_keyboard_set_keymap(std::ptr::addr_of_mut!((*this).wlr_keyboard), keymap);
     }
 
     /// # Safety
@@ -299,7 +357,7 @@ impl KeyboardGroup {
             return std::ptr::null_mut();
         }
         let Some(seat) = self.sid.and_then(|sid| wm.seats.get(sid)) else { return std::ptr::null_mut() };
-        let input_method = seat.relay.input_method;
+        let input_method = seat.relay.input_method();
         if !input_method.is_null() {
             return (*input_method).keyboard_grab;
         }
@@ -333,7 +391,7 @@ impl KeyboardGroup {
 
         for xkb_kbd in (*server).xkb_config.keyboards() {
             let parent_dev = (*xkb_kbd).parent_device;
-            let kbd = (*parent_dev).destroy_data as *mut crate::keyboard::Keyboard;
+            let kbd = (*parent_dev).keyboard();
             if !kbd.is_null() && std::ptr::eq((*kbd).group, self) {
                 (*xkb_kbd).send_state(layout_index, layout_name, capslock, numlock);
             }

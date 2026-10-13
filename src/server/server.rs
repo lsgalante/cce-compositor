@@ -362,7 +362,9 @@ unsafe extern "C" fn handle_new_toplevel_decoration(listener: *mut ffi::wl_liste
     let _server = crate::listener_owner!(listener, Server, new_toplevel_decoration);
     let decoration = data as *mut ffi::wlr_xdg_toplevel_decoration_v1;
     log::info!("new toplevel decoration");
-    crate::xdg_toplevel::XdgDecoration::init(decoration);
+    if crate::xdg_toplevel::XdgDecoration::init(decoration).is_null() {
+        log::error!("toplevel decoration for a toplevel with no XdgToplevel: left alone");
+    }
 }
 
 unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

@@ -10,7 +10,7 @@ impl WindowManager {
     pub unsafe fn apply_input_rules(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
         for device in input.devices() {
-            let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device);
+            let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device());
             if !name_ptr.is_null() {
                 let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
                 for rule in &self.input_rules {
@@ -38,26 +38,36 @@ impl WindowManager {
     }
 
     /// Push `input_config`'s repeat rate/delay to every hardware keyboard and
-    /// return how many there are. A keyboard regroups on a change (groups are
-    /// keyed by repeat info), so one already matching is left alone.
+    /// return how many there are.
+    ///
+    /// The groups change in place rather than the keyboards regrouping
+    /// (`Keyboard::set_repeat_info`, for one keyboard at a client's
+    /// request): leaving a group releases the keys a keyboard holds through
+    /// the group's key handler, which takes the window manager this method
+    /// holds — and a reload bound to a chord runs with the chord still held.
+    /// Every hardware keyboard gets the same values, so a group's members
+    /// all change together and the group stays keyed by their config.
     ///
     /// # Safety
     /// Every device registered in `input` has a live `wlr_device`, and a
-    /// hardware keyboard's `destroy_data` is null or its live `Keyboard`.
+    /// hardware keyboard's `keyboard()` is null or its live `Keyboard`,
+    /// whose group is null or live.
     pub unsafe fn apply_key_repeat(&mut self, input: &mut crate::input_manager::InputManager) -> usize {
         crate::wm_scope!(mut);
         let (rate, delay) = crate::shared::layout().input_config.repeat_info();
         let mut count = 0;
         for device in input.devices() {
             if !(*device).virtual_device
-                && ffi::river_wlr_input_device_get_type((*device).wlr_device) == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD
+                && ffi::river_wlr_input_device_get_type((*device).wlr_device()) == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD
             {
-                let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
+                let keyboard = (*device).keyboard();
                 if !keyboard.is_null() {
                     count += 1;
-                    if (*keyboard).config.repeat_rate != rate || (*keyboard).config.repeat_delay != delay {
-                        let seat = (*device).sid.and_then(|sid| self.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
-                        (*keyboard).set_repeat_info(seat, rate, delay);
+                    (*keyboard).config.repeat_rate = rate;
+                    (*keyboard).config.repeat_delay = delay;
+                    let group = (*keyboard).group;
+                    if !group.is_null() {
+                        crate::keyboard_group::KeyboardGroup::set_repeat_info(group, rate, delay);
                     }
                 }
             }

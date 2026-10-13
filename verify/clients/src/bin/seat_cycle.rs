@@ -10,6 +10,8 @@
 //   kbd NAME         a zwp_virtual_keyboard_v1 on the bound seat NAME, with a
 //                    us keymap; the compositor attaches it to that seat
 //   key NAME CODE    press and release evdev CODE on NAME's keyboard
+//   press NAME CODE  press evdev CODE on NAME's keyboard and leave it down
+//   release NAME CODE  let it go
 //   drop NAME        destroy NAME's virtual keyboard
 //   doomed NAME      destroy_seat NAME, then (same batch, before the
 //                    compositor's manage pass) a virtual keyboard bound to
@@ -160,7 +162,7 @@ fn seat_named<'a>(state: &'a State, name: &str) -> Option<&'a wl_seat::WlSeat> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    assert!(!args.is_empty(), "usage: seat-cycle <create N|destroy N|bind N|kbd N|key N CODE|drop N|sleep MS> ...");
+    assert!(!args.is_empty(), "usage: seat-cycle <create N|destroy N|bind N|kbd N|key N CODE|press N CODE|release N CODE|drop N|sleep MS> ...");
 
     let conn = Connection::connect_to_env().expect("connect to wayland display");
     let mut queue = conn.new_event_queue();
@@ -222,6 +224,13 @@ fn main() {
                 kbd.key(now(), code, 0);
                 i += 3;
             }
+            "press" | "release" => {
+                let name = arg(1);
+                let code: u32 = arg(2).parse().expect("press/release: evdev code");
+                let kbd = kbds.get(&name).unwrap_or_else(|| panic!("{step}: no keyboard on {name}"));
+                kbd.key(now(), code, (step == "press") as u32);
+                i += 3;
+            }
             "doomed" => {
                 let name = arg(1);
                 let seat = seat_named(&state, &name).unwrap_or_else(|| panic!("doomed: no seat {name}")).clone();
@@ -251,7 +260,8 @@ fn main() {
             }
             other => panic!("unknown step {other:?}"),
         }
-        let shown: Vec<&str> = args[i - if step == "key" { 3 } else { 2 }..i].iter().map(String::as_str).collect();
+        let width = if matches!(step, "key" | "press" | "release") { 3 } else { 2 };
+        let shown: Vec<&str> = args[i - width..i].iter().map(String::as_str).collect();
         match queue.roundtrip(&mut state) {
             Ok(_) => writeln!(out, "{}", shown.join(" ")).ok(),
             Err(e) => {

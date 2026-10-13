@@ -6,9 +6,28 @@ use crate::input_device::InputDevice;
 
 pub struct XkbKeyboardState {
     pub layout_index: Option<u32>,
-    pub layout_name: Option<*const std::os::raw::c_char>,
+    /// A copy, not the pointer `xkb_keymap_layout_get_name` returned: that
+    /// points into the keymap, which a regroup or a client's `set_keymap`
+    /// can free while this keeps it. Until 2026-10-13 it was the pointer,
+    /// and the next `send_state` compared against freed memory (and
+    /// `create_object` sent it to a newly bound client).
+    pub layout_name: Option<std::ffi::CString>,
     pub capslock: Option<bool>,
     pub numlock: Option<bool>,
+}
+
+impl XkbKeyboardState {
+    /// Whether layout `index` named `name` differs from what was last sent.
+    pub fn layout_changed(&self, index: u32, name: Option<&std::ffi::CStr>) -> bool {
+        self.layout_index != Some(index) || self.layout_name.as_deref() != name
+    }
+
+    /// Record layout `index` named `name` as sent, keeping a copy of the
+    /// name.
+    pub fn record_layout(&mut self, index: u32, name: Option<&std::ffi::CStr>) {
+        self.layout_index = Some(index);
+        self.layout_name = name.map(std::ffi::CStr::to_owned);
+    }
 }
 
 pub struct XkbKeyboard {
@@ -131,7 +150,7 @@ impl XkbKeyboard {
         // Send current cached state to client
         let sent = &self.sent;
         if let Some(layout_index) = sent.layout_index {
-            let name_ptr = sent.layout_name.unwrap_or(std::ptr::null());
+            let name_ptr = sent.layout_name.as_ref().map_or(std::ptr::null(), |name| name.as_ptr());
             ffi::wl_resource_post_event(resource, 2, layout_index, name_ptr); // layout event (opcode 2)
         }
         if let Some(capslock) = sent.capslock {
@@ -154,10 +173,11 @@ impl XkbKeyboard {
         }
     }
 
+    /// Tell the bound clients what changed since the last call.
+    ///
     /// # Safety
-    /// `layout_name` is null or a C string valid until the next
-    /// `send_state`: it is recorded (`sent.layout_name`), compared against
-    /// then, and re-sent by [`create_object`](Self::create_object).
+    /// `layout_name` is null or a C string live for the call (the group's
+    /// keymap's own name for the layout).
     pub unsafe fn send_state(
         &mut self,
         layout_index: u32,
@@ -165,25 +185,14 @@ impl XkbKeyboard {
         capslock: bool,
         numlock: bool,
     ) {
+        let name = (!layout_name.is_null()).then(|| std::ffi::CStr::from_ptr(layout_name));
+        let layout_changed = self.sent.layout_changed(layout_index, name);
         let sent = &mut self.sent;
         for obj in self.objects.ptrs() {
             let resource = (*obj).resource;
             let version = ffi::wl_resource_get_version(resource);
 
             let mut send_done = false;
-
-            // Check layout changed
-            let layout_changed = match sent.layout_index {
-                None => true,
-                Some(idx) => idx != layout_index,
-            } || match (sent.layout_name, layout_name.is_null()) {
-                (None, false) => true,
-                (Some(_), true) => true,
-                (Some(old_ptr), false) => {
-                    libc::strcmp(old_ptr, layout_name) != 0
-                }
-                (None, true) => false,
-            };
 
             if layout_changed {
                 ffi::wl_resource_post_event(resource, 2, layout_index, layout_name); // layout event (opcode 2)
@@ -223,8 +232,7 @@ impl XkbKeyboard {
             }
         }
 
-        sent.layout_index = Some(layout_index);
-        sent.layout_name = if layout_name.is_null() { None } else { Some(layout_name) };
+        sent.record_layout(layout_index, name);
         sent.capslock = Some(capslock);
         sent.numlock = Some(numlock);
     }
@@ -297,11 +305,15 @@ unsafe extern "C" fn xkb_keyboard_set_keymap(
         return;
     }
 
-    let kbd = (*keyboard).destroy_data as *mut crate::keyboard::Keyboard;
+    let kbd = (*keyboard).keyboard();
     if !kbd.is_null() {
-        let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-        let seat = (*keyboard).sid.and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
-        (*kbd).set_keymap(seat, (*keymap_struct).xkb_keymap);
+        let seat = {
+            let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+            (*keyboard).sid.and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut())
+        };
+        // With the window manager let go: the regroup releases the
+        // keyboard's keys, which runs the group's key handler.
+        crate::keyboard::Keyboard::set_keymap(kbd, seat, (*keymap_struct).xkb_keymap);
     }
 }
 
@@ -315,7 +327,7 @@ unsafe extern "C" fn xkb_keyboard_set_layout_by_index(
         return;
     }
     let keyboard = (*(*obj).keyboard).parent_device;
-    let kbd = (*keyboard).destroy_data as *mut crate::keyboard::Keyboard;
+    let kbd = (*keyboard).keyboard();
     if kbd.is_null() {
         return;
     }
@@ -324,7 +336,7 @@ unsafe extern "C" fn xkb_keyboard_set_layout_by_index(
         return;
     }
 
-    let keymap = (*group).config.keymap;
+    let keymap = (*group).keymap();
     if keymap.is_null() {
         return;
     }
@@ -336,7 +348,7 @@ unsafe extern "C" fn xkb_keyboard_set_layout_by_index(
 
     let mut modifiers = (*group).modifiers();
     modifiers.group = index as u32;
-    (*group).process_modifiers(modifiers);
+    crate::keyboard_group::KeyboardGroup::process_modifiers(group, modifiers);
 }
 
 unsafe extern "C" fn xkb_keyboard_set_layout_by_name(
@@ -349,7 +361,7 @@ unsafe extern "C" fn xkb_keyboard_set_layout_by_name(
         return;
     }
     let keyboard = (*(*obj).keyboard).parent_device;
-    let kbd = (*keyboard).destroy_data as *mut crate::keyboard::Keyboard;
+    let kbd = (*keyboard).keyboard();
     if kbd.is_null() {
         return;
     }
@@ -358,7 +370,7 @@ unsafe extern "C" fn xkb_keyboard_set_layout_by_name(
         return;
     }
 
-    let keymap = (*group).config.keymap;
+    let keymap = (*group).keymap();
     if keymap.is_null() {
         return;
     }
@@ -370,7 +382,7 @@ unsafe extern "C" fn xkb_keyboard_set_layout_by_name(
 
     let mut modifiers = (*group).modifiers();
     modifiers.group = index;
-    (*group).process_modifiers(modifiers);
+    crate::keyboard_group::KeyboardGroup::process_modifiers(group, modifiers);
 }
 
 unsafe extern "C" fn xkb_keyboard_capslock_enable(
@@ -382,7 +394,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_enable(
         return;
     }
     let keyboard = (*(*obj).keyboard).parent_device;
-    let kbd = (*keyboard).destroy_data as *mut crate::keyboard::Keyboard;
+    let kbd = (*keyboard).keyboard();
     if kbd.is_null() {
         return;
     }
@@ -391,7 +403,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_enable(
         return;
     }
 
-    let keymap = (*group).config.keymap;
+    let keymap = (*group).keymap();
     if keymap.is_null() {
         return;
     }
@@ -401,7 +413,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_enable(
         let mask = 1 << caps_idx;
         let mut modifiers = (*group).modifiers();
         modifiers.locked |= mask;
-        (*group).process_modifiers(modifiers);
+        crate::keyboard_group::KeyboardGroup::process_modifiers(group, modifiers);
     }
 }
 
@@ -414,7 +426,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_disable(
         return;
     }
     let keyboard = (*(*obj).keyboard).parent_device;
-    let kbd = (*keyboard).destroy_data as *mut crate::keyboard::Keyboard;
+    let kbd = (*keyboard).keyboard();
     if kbd.is_null() {
         return;
     }
@@ -423,7 +435,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_disable(
         return;
     }
 
-    let keymap = (*group).config.keymap;
+    let keymap = (*group).keymap();
     if keymap.is_null() {
         return;
     }
@@ -433,7 +445,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_disable(
         let mask = 1 << caps_idx;
         let mut modifiers = (*group).modifiers();
         modifiers.locked &= !mask;
-        (*group).process_modifiers(modifiers);
+        crate::keyboard_group::KeyboardGroup::process_modifiers(group, modifiers);
     }
 }
 
@@ -446,7 +458,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_enable(
         return;
     }
     let keyboard = (*(*obj).keyboard).parent_device;
-    let kbd = (*keyboard).destroy_data as *mut crate::keyboard::Keyboard;
+    let kbd = (*keyboard).keyboard();
     if kbd.is_null() {
         return;
     }
@@ -455,7 +467,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_enable(
         return;
     }
 
-    let keymap = (*group).config.keymap;
+    let keymap = (*group).keymap();
     if keymap.is_null() {
         return;
     }
@@ -465,7 +477,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_enable(
         let mask = 1 << num_idx;
         let mut modifiers = (*group).modifiers();
         modifiers.locked |= mask;
-        (*group).process_modifiers(modifiers);
+        crate::keyboard_group::KeyboardGroup::process_modifiers(group, modifiers);
     }
 }
 
@@ -478,7 +490,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_disable(
         return;
     }
     let keyboard = (*(*obj).keyboard).parent_device;
-    let kbd = (*keyboard).destroy_data as *mut crate::keyboard::Keyboard;
+    let kbd = (*keyboard).keyboard();
     if kbd.is_null() {
         return;
     }
@@ -487,7 +499,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_disable(
         return;
     }
 
-    let keymap = (*group).config.keymap;
+    let keymap = (*group).keymap();
     if keymap.is_null() {
         return;
     }
@@ -497,6 +509,50 @@ unsafe extern "C" fn xkb_keyboard_numlock_disable(
         let mask = 1 << num_idx;
         let mut modifiers = (*group).modifiers();
         modifiers.locked &= !mask;
-        (*group).process_modifiers(modifiers);
+        crate::keyboard_group::KeyboardGroup::process_modifiers(group, modifiers);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::XkbKeyboardState;
+    use crate::ffi;
+
+    fn unsent() -> XkbKeyboardState {
+        XkbKeyboardState { layout_index: None, layout_name: None, capslock: None, numlock: None }
+    }
+
+    #[test]
+    fn a_layout_changes_with_its_index_or_its_name() {
+        let mut sent = unsent();
+        assert!(sent.layout_changed(0, None), "nothing sent yet");
+        sent.record_layout(0, Some(c"English (US)"));
+        assert!(!sent.layout_changed(0, Some(c"English (US)")));
+        assert!(sent.layout_changed(1, Some(c"English (US)")));
+        assert!(sent.layout_changed(0, Some(c"German")));
+        assert!(sent.layout_changed(0, None));
+        sent.record_layout(0, None);
+        assert!(!sent.layout_changed(0, None));
+    }
+
+    #[test]
+    fn the_sent_layout_name_outlives_the_keymap_it_came_from() {
+        let mut sent = unsent();
+        {
+            let context = xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS);
+            let keymap = xkbcommon::xkb::Keymap::new_from_names(
+                &context, "", "", "us", "", None, xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
+            )
+            .expect("compile a us keymap");
+            // The pointer `KeyboardGroup::send_state` hands over: into the
+            // keymap's own memory.
+            let name = unsafe { ffi::xkb_keymap_layout_get_name(keymap.get_raw_ptr() as *mut ffi::xkb_keymap, 0) };
+            assert!(!name.is_null());
+            sent.record_layout(0, Some(unsafe { std::ffi::CStr::from_ptr(name) }));
+            // The last reference goes here, and the keymap with it: a group
+            // unref or a client's `set_keymap` does this to the live one.
+        }
+        assert_eq!(sent.layout_name.as_deref(), Some(c"English (US)"));
+        assert!(!sent.layout_changed(0, Some(c"English (US)")));
     }
 }

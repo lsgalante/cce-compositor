@@ -59,7 +59,9 @@ pub struct XdgToplevel {
 unsafe impl crate::listener::Anchored for XdgToplevel {}
 
 pub struct XdgDecoration {
-    pub wlr_decoration: *mut ffi::wlr_xdg_toplevel_decoration_v1,
+    /// Live until the decoration's destroy handler frees this. Private,
+    /// because the handlers and `XdgToplevel::configure` dereference it.
+    wlr_decoration: *mut ffi::wlr_xdg_toplevel_decoration_v1,
     destroy: crate::listener::Listener,
     request_mode: crate::listener::Listener,
 }
@@ -1207,13 +1209,22 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
 }
 
 impl XdgDecoration {
+    /// Track `wlr_decoration` on its toplevel's `XdgToplevel`. Null, and
+    /// nothing made, when the toplevel has none: `XdgToplevel::create`
+    /// failed for it (its client is being disconnected), so the xdg
+    /// surface's data was never set, and every handler here would
+    /// dereference that null.
+    ///
     /// # Safety
-    /// `wlr_decoration` must point to a new, live decoration whose toplevel
-    /// already has its `XdgToplevel`, and no window-manager borrow may be live:
-    /// this may run the request-mode handler, which takes one.
+    /// `wlr_decoration` must point to a new, live decoration, and no
+    /// window-manager borrow may be live: this may run the request-mode
+    /// handler, which takes one.
     pub unsafe fn init(wlr_decoration: *mut ffi::wlr_xdg_toplevel_decoration_v1) -> *mut Self {
         let base = ffi::river_wlr_xdg_toplevel_get_base((*wlr_decoration).toplevel);
         let toplevel = ffi::river_wlr_xdg_surface_get_data(base) as *mut XdgToplevel;
+        if toplevel.is_null() {
+            return std::ptr::null_mut();
+        }
 
         let decoration = Box::into_raw(Box::new(XdgDecoration {
             wlr_decoration,

@@ -50,8 +50,13 @@ impl IdleInhibitManager {
         self.new_idle_inhibitor.disconnect();
         
         for inhibitor in self.inhibitors.ptrs() {
-            // At shutdown: nothing is left to keep awake, so no recount.
-            IdleInhibitor::destroy(inhibitor);
+            // Out of the registry through `self`, not through the
+            // inhibitor's own pointer to this manager (`IdleInhibitor::
+            // destroy`): that would make a second `&mut` to it while `self`
+            // is live. At shutdown: nothing is left to keep awake, so no
+            // recount.
+            self.inhibitors.remove(inhibitor);
+            IdleInhibitor::free(inhibitor);
         }
     }
 
@@ -158,16 +163,27 @@ impl IdleInhibitor {
         Ok(inhibitor)
     }
 
-    /// The caller recounts after (not at shutdown, where nothing is left
-    /// to keep awake).
+    /// Take the inhibitor out of its manager's registry and free it. The
+    /// caller recounts after (not at shutdown, where nothing is left to
+    /// keep awake).
     ///
     /// # Safety
     /// `inhibitor` must be one [`create`](Self::create) returned and not yet
-    /// destroyed, and its manager still live; it is freed here.
+    /// destroyed, and its manager still live, with nothing holding a
+    /// reference to it: this reaches the manager through the inhibitor's
+    /// pointer to it. The inhibitor is freed here.
     pub unsafe fn destroy(inhibitor: *mut Self) {
-        (*inhibitor).listen_destroy.disconnect();
         (*(*inhibitor).inhibit_manager).inhibitors.remove(inhibitor);
-        let _boxed = Box::from_raw(inhibitor);
+        Self::free(inhibitor);
+    }
+
+    /// Disconnect and free an inhibitor already out of the registry.
+    ///
+    /// # Safety
+    /// `inhibitor` is live and in no registry; nothing uses it after.
+    unsafe fn free(inhibitor: *mut Self) {
+        (*inhibitor).listen_destroy.disconnect();
+        drop(Box::from_raw(inhibitor));
     }
 }
 
@@ -197,7 +213,54 @@ unsafe extern "C" fn handle_inhibitor_destroy(
 
 #[cfg(test)]
 mod tests {
-    use super::inhibitor_name;
+    use super::{inhibitor_name, IdleInhibitManager, IdleInhibitor};
+    use crate::ffi;
+    use crate::server::WlList;
+
+    /// A wlroots inhibitor with only its destroy signal set up.
+    fn fake_inhibitor() -> Box<ffi::wlr_idle_inhibitor_v1> {
+        let mut inhibitor: Box<ffi::wlr_idle_inhibitor_v1> = Box::new(unsafe { std::mem::zeroed() });
+        let head = &mut inhibitor.events.destroy.listener_list as *mut ffi::wl_list as *mut WlList;
+        unsafe {
+            (*head).prev = head;
+            (*head).next = head;
+        }
+        inhibitor
+    }
+
+    fn listeners(inhibitor: &ffi::wlr_idle_inhibitor_v1) -> usize {
+        let head = &inhibitor.events.destroy.listener_list as *const ffi::wl_list;
+        let mut n = 0;
+        let mut cur = inhibitor.events.destroy.listener_list.next as *const ffi::wl_list;
+        while cur != head {
+            n += 1;
+            cur = unsafe { (*cur).next };
+        }
+        n
+    }
+
+    #[test]
+    fn deinit_frees_every_inhibitor_and_unlinks_its_listener() {
+        // As `Server::zeroed` makes it: zero bytes, then a real registry.
+        let mut manager = std::mem::MaybeUninit::<IdleInhibitManager>::zeroed();
+        let mut manager = unsafe {
+            IdleInhibitManager::init_registry_in_place(manager.as_mut_ptr());
+            manager.assume_init()
+        };
+        let mut wlr: Vec<_> = (0..3).map(|_| fake_inhibitor()).collect();
+        for inhibitor in &mut wlr {
+            unsafe { IdleInhibitor::create(&mut **inhibitor, &mut manager) }.unwrap();
+        }
+        assert_eq!(manager.inhibitors.ptrs().len(), 3);
+        assert!(wlr.iter().all(|i| listeners(i) == 1));
+
+        // Each inhibitor leaves the registry through the manager this
+        // borrows, not through its own pointer to it.
+        unsafe { manager.deinit() };
+
+        assert!(manager.inhibitors.ptrs().is_empty());
+        assert!(wlr.iter().all(|i| listeners(i) == 0), "a freed inhibitor's listener is still linked");
+    }
 
     #[test]
     fn a_window_is_its_app_id_then_its_title_then_the_kind() {

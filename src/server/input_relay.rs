@@ -9,7 +9,10 @@ use crate::seat::Seat;
 pub struct InputRelay {
     /// Private: walks trust that a registered text input is live.
     text_inputs: crate::registry::Registry<TextInput>,
-    pub input_method: *mut ffi::wlr_input_method_v2,
+    /// Null, or the seat's live input method: its destroy handler clears
+    /// it. Private, because the relay's handlers dereference it; read it
+    /// with `input_method()`.
+    input_method: *mut ffi::wlr_input_method_v2,
     /// Private: walks trust that a registered popup is live (its destroy
     /// handler unregisters it before freeing it).
     input_popups: crate::registry::Registry<crate::input_popup::InputPopup>,
@@ -32,6 +35,13 @@ pub struct InputRelay {
 impl Default for InputRelay {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl InputRelay {
+    /// The seat's input method, or null.
+    pub fn input_method(&self) -> *mut ffi::wlr_input_method_v2 {
+        self.input_method
     }
 }
 

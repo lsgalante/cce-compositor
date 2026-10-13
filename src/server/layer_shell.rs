@@ -20,6 +20,13 @@ pub struct LayerShell {
     new_surface: crate::listener::Listener,
 }
 
+// SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
+// makes and `run_server` never frees. It has no safe constructor, so safe code
+// holding the one `&mut` to it has nothing to swap it with or replace it by.
+// (`handle_new_surface` never routes back to it today; `connect` asks for
+// this all the same.)
+unsafe impl crate::listener::Anchored for LayerShell {}
+
 impl LayerShell {
     /// # Safety
     /// `wl_display` must be the live display, and [`deinit`](Self::deinit)

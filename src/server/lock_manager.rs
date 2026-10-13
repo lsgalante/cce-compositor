@@ -317,7 +317,9 @@ pub struct LockSurface {
     /// Set once, by `create`; private because the safe `wlr_output`,
     /// `surface` and `configure` trust it.
     wlr_lock_surface: *mut ffi::wlr_session_lock_surface_v1,
-    pub lock: *mut ffi::wlr_session_lock_v1,
+    /// The lock the surface belongs to, set once by `create`; private
+    /// because the surface's destroy path walks its surface list.
+    lock: *mut ffi::wlr_session_lock_v1,
     pub manager: *mut LockManager,
 
     pub idle_update_focus: *mut ffi::wl_event_source,

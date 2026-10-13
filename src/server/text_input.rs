@@ -84,7 +84,7 @@ unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut 
     seat.relay.set_text_input(text_input);
     seat.relay.osk.field_active();
 
-    let input_method = seat.relay.input_method;
+    let input_method = seat.relay.input_method();
     if !input_method.is_null() {
         ffi::wlr_input_method_v2_send_activate(input_method);
         crate::input_relay::InputRelay::send_input_method_state(wm, sid);
@@ -102,7 +102,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     }
 
     seat.relay.osk.field_active();
-    if !seat.relay.input_method.is_null() {
+    if !seat.relay.input_method().is_null() {
         crate::input_relay::InputRelay::send_input_method_state(wm, sid);
     }
 }

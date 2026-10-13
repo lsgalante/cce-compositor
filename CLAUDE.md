@@ -238,10 +238,12 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Twenty-six modules carry unit tests — `window_manager.rs` (the most of any, among
+Twenty-seven modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
-`idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
+`idle_inhibit_manager.rs` (among them `deinit` freeing every inhibitor and
+unlinking it), `xkb_keyboard.rs` (the sent layout name outlives its keymap),
+`xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
 `text.rs`, `global_shortcuts.rs` (trigger parsing),
 `cce_ctl.rs` (when `focus-window` waits, and its fallback on an older compositor),
 `layout_probe.rs` (every hand-written `#[repr(C)]` mirror of a wlroots/pixman struct against
@@ -379,6 +381,17 @@ asserts that no `timeout occurred` is logged after the reply. Before
 2026-10-09 one was, every run: the settle poll read `scheduled.dirty`, which
 `manage_start` clears as a sequence begins, so a transaction awaiting acks
 looked like a window at rest. Same `--bin` passthrough as above.
+
+`./verify/key-release-test` proves a key held on a keyboard that leaves its
+seat is still released, now that the release happens at the entry point
+(see "Context passing", the keyboard-group paragraph). An `a` bound as a
+portal shortcut makes each press and release a line on the status socket's
+`shortcuts` topic, and `verify/clients` `seat-cycle` (its `press` / `release`
+steps hold a key) puts a held key through `destroy_seat` of the keyboard's
+seat, its client destroying the keyboard, and a `ccectl exit force`, which
+must still reach `InputManager::deinit finished`. Hardware-keyboard paths
+(a reload's repeat change, `input_device.assign_to_seat`) have no headless
+equivalent. Same `--bin` passthrough as above.
 
 ## Build pipeline (`build.rs`)
 
@@ -902,10 +915,10 @@ take `(wm, sid)`. Its popups are repositioned from a copied list
 `InputPopup::update` reads the relay back through its own pointer.
 A `KeyboardGroup` (its own allocation, in the seat's `keyboard_groups`
 registry) finds its seat by `sid` in the key and modifier handlers and
-`get_input_method_grab(wm)`; it keeps no seat pointer: `unref(seat, ..)`
+`get_input_method_grab(wm)`; it keeps no seat pointer: `unref(group, seat)`
 is handed the seat by its caller (`Seat::destroy` passes the seat it is
-tearing down, still in the store; `Keyboard::destroy` passes null,
-the device having been detached first; the last unref takes the group out
+tearing down, still in the store; `Keyboard::destroy` passes null through
+`Keyboard::leave_group`, the device having been detached first; the last unref takes the group out
 of every seat's registry, `seat::live_places`). A wlroots callback handed a
 `wlr_seat` turns it into an id with `wm.seats.find(wlr_seat)` (the seat
 that holds it) and borrows the seat from `wm.seats` (text inputs, the
@@ -1046,6 +1059,26 @@ borrow the field instead (`Server::deinit` passes `&mut self.wm` beside
 no object leading to the server (a keyboard group without a seat) uses
 `crate::shared::server_ptr()`. A new callback fetches once at its top; a
 new helper takes `wm` — it never fetches.
+
+**A wlroots call that emits a signal the compositor listens to is a
+re-entry, too** (since 2026-10-13). Feeding a keyboard group's keyboard —
+`wlr_keyboard_notify_key`, `_notify_modifiers`, `_set_keymap` — runs
+`handle_group_key` / `handle_group_modifiers`, entry points that take the
+window manager and a `Sys` and borrow the group through its listener. So
+`KeyboardGroup::process_key` / `process_modifiers` / `process_keymap` /
+`replace_keymap` take the group by pointer, not `&mut self`, and run only
+where nothing is borrowed; `KeyboardGroup::unref` and `Seat::detach_device`
+release no keys. A keyboard leaving its group has them released first, from
+the entry point, before it binds anything (`Keyboard::release_pressed`,
+`InputDevice::release_keys`: `input_manager_destroy_seat`,
+`input_device_assign_to_seat`, the device destroy handler,
+`Keyboard::set_keymap` / `set_repeat_info`); deinit drops them. Until then
+`detach_device`, under `release_seat`, `assign_to_seat` and deinit (with the
+exit chord still down), and the config reload's repeat change
+(`apply_key_repeat`, which now changes the groups in place) fed them through
+the group's handler under their own borrows. The keys a dying keyboard
+holds, wlroots releases itself in `wlr_keyboard_finish`, before the
+device's destroy signal.
 
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 
