@@ -702,12 +702,15 @@ impl Cursor {
         this.wlr_seat().pointer_notify_clear_focus();
 
         // A grab does not focus the window it moves or resizes, and it was
-        // the press's `seat.focus` that used to raise a Floating one — so
-        // the raise happens here for whatever the op grabbed. (A window
-        // un-tiled by the drag is raised in `op_update` instead.)
+        // the press's `seat.focus` that used to raise it — so the raise
+        // happens here for whatever the op grabbed: a Floating window, or a
+        // Tiled one, which can be stacked on another and is resized in place.
+        // (A window un-tiled by a move is raised again in `op_update`.)
         let grabbed = seat_mut!(wm, sid, ()).op.as_ref().and_then(|op| op.window).filter(|&id| {
             wm.windows.get(id).is_some_and(|w| {
-                !w.closed && !w.is_status_bar() && w.tiling_mode == crate::tiling::TilingMode::Floating
+                !w.closed
+                    && !w.is_status_bar()
+                    && matches!(w.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled)
             })
         });
         if let Some(id) = grabbed {

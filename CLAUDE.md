@@ -838,7 +838,7 @@ not `&mut self`** (since 2026-10-11): `Window::map`, `unmap`,
 `set_closing`, `manage_start`, `manage_finish`, `notify_title`,
 `notify_app_id`, `anchor_resize_commit`, the placement steps (`try_restore`,
 `try_hint_placement`, `try_center_on_view` / `_on_sibling`,
-`apply_*_centering`, `take_pending_view_center`, `avoid_tiled_overlap`,
+`apply_*_centering`, `take_pending_view_center`,
 `place_on_invocation_cell`), `start_map_fade`, `start_fs_anim`,
 `step_adjust_dim` and `pan_to_restored_fullscreen_spot`. A `&mut self`
 method reached through a raw pointer while `wm` rides along let focus,
@@ -1279,9 +1279,11 @@ sat outside the edges and the ring that followed hugged them.
   step.
 - **A Floating window lying over the adjust target is dimmed** to
   `border.overlap_opacity` (default 0.4; 1.0 disables) while the mode is
-  on, so it does not hide the handles. `Window::adjust_dim_wanted` walks
-  the render list bottom-up: only windows ABOVE the target that overlap it
-  on screen qualify (one beneath hides nothing). `step_adjust_dim` eases
+  on, so it does not hide the handles — and so is a Tiled one over a Tiled
+  target, since tiled windows stack (below). `Window::adjust_dim_wanted`
+  walks the render list bottom-up: only windows ABOVE the target that
+  overlap it on screen qualify (one beneath hides nothing), and a Tiled
+  window never covers a Floating target, whose plane is drawn above it. `step_adjust_dim` eases
   `adjust_dim` on the same border-fade timer as the ring, and
   `effective_opacity` folds it into the scene-tree opacity `render_finish`
   sets — set the tree opacity through that, never from
@@ -1340,7 +1342,7 @@ sat outside the edges and the ring that followed hugged them.
   Super arms whatever the pointer is already on, and a focus chord pressed
   next acts on the window the user had. **A drag never focuses the window it moves or resizes** (the grab
   paths in `handle_button` call no `seat.focus`; `op_start_pointer` raises
-  a Floating one instead); a tap on the band or body — press+release
+  a Floating or Tiled one instead); a tap on the band or body — press+release
   without motion — is a click and focuses in `op_end`.
   `adjust_held` is refreshed from the keyboard's modifier mask on every
   modifiers event (`refresh_adjust_held`), which also re-runs the pointer
@@ -1356,7 +1358,7 @@ sat outside the edges and the ring that followed hugged them.
   `handles_live`, and `get_border_zone` all ask it). Separately, **focus
   follows the pointer in overview** (the ring does not key on it): the
   motion path focuses the hovered toplevel — guarded on an actual change,
-  because `seat.focus` raises a Floating window *before* its same-focus
+  because `seat.focus` raises a Floating or Tiled window *before* its same-focus
   short-circuit, so an unguarded call would raise and relayout on every
   motion event — and with `suppress_focus_pan` set, so hovering never moves
   the camera; only clicks and the keyboard may. The ring's fade is
@@ -1825,6 +1827,30 @@ motion and a hold do not count. Swipes were added on 2026-09-26: a login
 navigated only by three-finger swipes left each restored window's first
 focus wherever it sat, often half off screen, while a second focus panned.
 
+### Tiled windows stack (since 2026-10-13)
+
+Two tiled windows may share cells. Nothing moves one off another any more:
+an overview drag displaces only Floating windows, and only for a drag
+grabbed Floating (`displace_covered`; until then a tiled drag pushed the
+tiled windows it covered to the side it vacated, live), and a tiled window
+mapping onto another stays there (the spawn-time `avoid_tiled_overlap`,
+which stepped it onto the nearest free cells, is gone; session restore was
+already exempt). The stacking follows focus: `Seat::focus` raises a Tiled
+window as it does a Floating one, and `op_start_pointer` raises a grabbed
+one, so a window pressed, focused or moved comes out on top. The planes
+are unchanged — `render_finish` still draws every Floating (and Utility)
+window above every Tiled one, whatever the render-list order, so a raised
+tiled window rises only among the tiled windows. The keyboard
+`move_window_*` step still SWAPS a tiled window with the one tiled window
+in its destination (`cce-window-manager` `actions::move_tiled`): that is an
+explicit command, not an automatic move. Left behind in the policy crate,
+no longer called for tiled windows: `overview::displace`'s tiled branch and
+`spawn::nearest_free`. Stacking order is not saved, so a session restore
+re-stacks in map order. In a shadow: two `set-mode tiled` windows, an
+overview drag of one onto the other (`pointer-press` / `pointer-move-to` /
+`pointer-release`), then `ctl windows` shows both on the same cells and
+the focused one with the higher `stack=`.
+
 ### Fullscreen steps aside for focus
 
 A fullscreen window lives in `layers.fullscreen`, above every desk window, so
@@ -1918,9 +1944,10 @@ activation for an already-mapped window changed nothing on screen. A request
 that lands before the map (Chromium/Electron activate a new window between
 its app_id and its first buffer, so the log reads `Restoring saved state` →
 `xdg activation request` → `Seat::focus`) is left to the map path, which
-focuses under its own settle rules. Every `Seat::focus` on a Floating window
-raises it, and `render_finish` keeps the floating plane above the tiled one
-in render-list order, so focus IS visibility for a float — `ccectl windows`
+focuses under its own settle rules. Every `Seat::focus` on a Floating or
+Tiled window raises it, and `render_finish` keeps the floating plane above
+the tiled one in render-list order, so focus IS visibility for a float, and
+for a tiled window among the tiled ones — `ccectl windows`
 prints `stack=N` (render-list position, higher is nearer) so that order can
 be asserted from a shadow without a screenshot.
 

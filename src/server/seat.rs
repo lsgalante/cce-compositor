@@ -517,8 +517,15 @@ impl Seat {
             }
         }
 
+        // Focus raises a window over whatever shares its space. Tiled
+        // windows stack too (since 2026-10-13; a drag no longer pushes them
+        // apart), so they are raised like Floating ones — within their own
+        // plane: the reorder pass keeps every Floating window above every
+        // Tiled one whatever the render-list order (`render_finish`).
         if let Some(id) = wid {
-            if window_is(wm, |w| w.tiling_mode == crate::tiling::TilingMode::Floating) {
+            if window_is(wm, |w| {
+                matches!(w.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled)
+            }) {
                 wm.raise_window(id);
                 crate::shared::pending().dirty_windowing();
             }
@@ -1194,11 +1201,15 @@ impl Seat {
                             this.virtual_x = vx;
                             this.virtual_y = vy;
 
-                            // Overview moves displace what they cover: any
-                            // window the drag covers past the threshold
-                            // scoots to the side the drag vacated.
+                            // Overview moves of a Floating window displace
+                            // the Floating windows they cover: any the drag
+                            // covers past the threshold scoots to the side
+                            // the drag vacated. A tiled drag displaces
+                            // nothing — tiled windows stack
+                            // (`displace_covered`).
                             if crate::shared::mode()
                                 == crate::window_manager::WindowManagerMode::Overview
+                                && !op.start_was_tiled
                             {
                                 // Out of the seat for the call, which needs
                                 // `wm`; it reads no seat.
@@ -1208,7 +1219,6 @@ impl Seat {
                                 displace_covered(
                                     wm,
                                     id,
-                                    op.start_was_tiled,
                                     (virtual_dx, virtual_dy),
                                     &sp,
                                     &mut displaced,
@@ -1566,25 +1576,27 @@ fn carry_group_items(wm: &mut crate::window_manager::WindowManager, items: &[(u6
 }
 
 /// Live overview displacement for one motion step of a move op: every
-/// mapped, visible Floating/Tiled window the drag covers past the policy
+/// mapped, visible Floating window the drag covers past the policy
 /// threshold relocates to the side the drag vacated
 /// (`crate::policy::overview::displace`). Single-level on purpose — a
 /// displaced window does not cascade into a third.
+///
+/// Tiled windows are never displaced (since 2026-10-13): they stack, so a
+/// tiled window dropped on another stays there, and whichever is focused
+/// is raised over the other (`Seat::focus`). Until then a tiled drag pushed
+/// the tiled windows it covered aside, which made stacking two impossible.
+/// The caller runs this only for a drag grabbed Floating (not the op's
+/// `start_was_tiled`), and the policy pairs a drag only with candidates of
+/// its own kind, so the candidates are the Floating windows alone.
 ///
 /// Displacement is provisional while the button is held: `ledger` remembers
 /// every displaced window's pre-displacement position, and each motion
 /// re-evaluates the window AT THAT SPOT — a drag that stops covering it
 /// releases it back home. The ledger drops with the op on release, which
 /// finalizes wherever everything currently sits.
-///
-/// `moved_tiled` is what the dragged window was when it was GRABBED (the op's
-/// `start_was_tiled`), for the reason the snap call above gives: the drag
-/// un-tiles it on the first motion event, so its live mode reads Floating
-/// however it started. The policy skips candidates of the other kind.
 fn displace_covered(
     wm: &mut crate::window_manager::WindowManager,
     moving: crate::window::WindowId,
-    moved_tiled: bool,
     drag_delta: (f64, f64),
     sp: &crate::policy::snap::SnapParams,
     ledger: &mut Vec<(crate::window::WindowId, f64, f64)>,
@@ -1616,9 +1628,7 @@ fn displace_covered(
             continue;
         }
         let mode = wm.get_mode_for_window(w);
-        if mode != crate::tiling::TilingMode::Floating
-            && mode != crate::tiling::TilingMode::Tiled
-        {
+        if mode != crate::tiling::TilingMode::Floating {
             continue;
         }
         // Judge an already-displaced window at its ORIGINAL spot, not
@@ -1634,11 +1644,11 @@ fn displace_covered(
             y: oy,
             w: w.box_geom.width as f64,
             h: w.box_geom.height as f64,
-            tiled: mode == crate::tiling::TilingMode::Tiled,
+            tiled: false,
         });
     }
     let moves = crate::policy::overview::displace(
-        moved, moved_tiled, drag_delta, &cands, sp, sp.gap_width,
+        moved, false, drag_delta, &cands, sp, sp.gap_width,
     );
 
     let mut changed = false;

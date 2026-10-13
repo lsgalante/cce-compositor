@@ -291,15 +291,18 @@ impl Window {
     }
 
     /// Whether this window should be dimmed right now: adjust mode is on,
-    /// this is a Floating window, and it lies ABOVE the adjust target in the
-    /// render stack while overlapping it on screen — where it would cover
-    /// the target's handles. Windows under the target are left alone; they
-    /// hide nothing.
+    /// this is a Floating or Tiled window, and it lies ABOVE the adjust
+    /// target in the render stack while overlapping it on screen — where it
+    /// would cover the target's handles. Windows under the target are left
+    /// alone; they hide nothing. A Tiled window covers only a Tiled target:
+    /// the whole Floating plane is drawn above it, whatever the render-list
+    /// order (`render_finish`).
     pub fn adjust_dim_wanted(&self, wm: &crate::window_manager::WindowManager) -> bool {
         let stores = stores!(wm);
+        let tiled = self.tiling_mode == crate::tiling::TilingMode::Tiled;
         if !crate::shared::window_adjust_active()
             || self.closed
-            || self.tiling_mode != crate::tiling::TilingMode::Floating
+            || !(tiled || self.tiling_mode == crate::tiling::TilingMode::Floating)
             || self.is_status_bar()
             || self.is_wallpaper()
             || self.is_grid()
@@ -323,6 +326,7 @@ impl Window {
             if !w.closed
                 && window_takes_handles(w)
                 && w.is_adjust_target(stores)
+                && (!tiled || w.tiling_mode == crate::tiling::TilingMode::Tiled)
             {
                 let (tx, ty, tw, th) = on_screen(w);
                 if mx < tx + tw && tx < mx + mw && my < ty + th && ty < my + mh {

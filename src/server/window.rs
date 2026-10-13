@@ -1403,11 +1403,11 @@ impl Window {
         // over both the remembered geometry and any stale place-next hint.
         Window::try_center_on_view(wm, id);
         Window::try_center_on_sibling(wm, id);
-        // After every placement decision, including the invocation-square one:
-        // whichever chose this spot, a tiled window must not open stacked on
-        // another. The anchor rule already avoids that when any corner is
-        // clear, so this only acts when none was.
-        Window::avoid_tiled_overlap(wm, id);
+        // A tiled window may open stacked on another (since 2026-10-13):
+        // tiled windows stack, and a new window enters the render list on
+        // top (`manage_start`). `avoid_tiled_overlap` used to step it off
+        // onto the nearest free cells, which undid a stack the user had made
+        // the next time one of its windows opened.
 
         let this = window_mut!(wm, id, Err("window gone during placement"));
         let surface = this.root_surface();
