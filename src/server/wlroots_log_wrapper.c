@@ -1067,6 +1067,8 @@ bool river_scene_node_get_enabled(struct wlr_scene_node *node) {
  * invisible regardless of what the window-manager state says. */
 static void river_ovdbg_buffer_iter(struct wlr_scene_buffer *buffer,
 		int sx, int sy, void *data) {
+	(void)sx;
+	(void)sy;
 	const char *tag = data;
 	struct wlr_scene_node *node = &buffer->node;
 	int lx = 0, ly = 0;
@@ -1141,7 +1143,7 @@ static bool cce_data_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
 }
 
 static void cce_data_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer) {
-	/* nothing to unmap */
+	(void)wlr_buffer; /* nothing to unmap */
 }
 
 static const struct wlr_buffer_impl cce_data_buffer_impl = {
