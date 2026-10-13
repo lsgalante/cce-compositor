@@ -1887,7 +1887,14 @@ or up (Prev). Every focus raises, so the live order would only trade the
 top two windows; `WindowManager::focus_cycle` keeps the order a cycle
 started from (`focus_cycle_order`, recorded by `note_focus_cycle`) while
 the focus is where the last step left it and the same windows are up, and
-any other focus change starts the next press from the stack afresh. In a
+any other focus change starts the next press from the stack afresh.
+**Directional focus lands on the top of a stack** (since 2026-10-13): the
+four-way chords and the swipe's aimed focus (`focus_toward`) get each
+window's drawn position too (`ActionWindow::stack`, filled in
+`build_action_ctx`), and a pick lying under another candidate that covers
+its center gives way to the topmost one (the policy's
+`focus::topmost_over`) — stacked windows score alike, and the one
+underneath used to win on window id and pop out over the one in view. In a
 shadow, F floating over T3, T2, T1 (created T1, T2, T3, F) cycles F, T3,
 T2, T1, F, and `focus-window T1` then `focus-next` goes to T3. In a
 shadow: two `set-mode tiled` windows, an

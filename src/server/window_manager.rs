@@ -985,6 +985,12 @@ impl WindowManager {
         let rendered: std::collections::HashSet<WindowId> =
             self.rendering_requested.list.iter().copied().collect();
 
+        // The stacking order as drawn, topmost first (`ActionWindow::stack`):
+        // directional focus lands on the top of a stack.
+        let mut drawn: Vec<((u32, u32), WindowId)> =
+            self.windows.values().filter_map(|w| w.drawn_stack_key().map(|k| (k, w.id()))).collect();
+        drawn.sort_by(|a, b| b.0.cmp(&a.0));
+
         let mut windows = Vec::new();
         for w in self.windows.values() {
             if w.closed {
@@ -1024,6 +1030,7 @@ impl WindowManager {
                 visible,
                 focus_cyclable,
                 cycle_rank: None,
+                stack: drawn.iter().position(|&(_, id)| id == w.id()).map(|p| p as u32),
                 overview_eligible,
             });
         }
