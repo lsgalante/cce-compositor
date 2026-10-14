@@ -9,7 +9,7 @@
 # Opened by the compositor (cursor.rs, the right-click border path): from a
 # right-click on a window's handle disc in adjust mode, and from a right-click
 # anywhere on a window in overview. It is a `cce-cloud --json` popup, the same
-# mechanism as cce-desktop-menu and cce-desktop's desktop-item menu, so it looks
+# mechanism as the cce-desktop-menu fallback, so it looks
 # and dismisses like every other menu in the DE. The first page holds the
 # window verbs; "Window Mode" is a second page (a button with `target_page`
 # switches pages without closing the popup) listing the modes `ccectl

@@ -633,8 +633,8 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             let initial_mode = this.tiling_mode;
             let stores = stores!(wm);
             let zone = get_border_zone(window_ref!(wm, id), stores, lx, ly);
-            // The window context menu (`scripts/cce-app-menu`, a cce-cloud
-            // popup like the desktop menu and cce-desktop's item menu). A
+            // The window context menu (cce-desktop's, in process, or the
+            // `scripts/cce-app-menu` fallback, a cce-cloud popup). A
             // right-click on a handle disc opens it in either adjust mode;
             // in OVERVIEW a right-click anywhere on the window does: the
             // client never sees buttons there (`should_block_button`), so

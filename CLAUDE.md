@@ -1424,8 +1424,7 @@ sat outside the edges and the ring that followed hugged them.
   SHARED with a neighbouring window, and an inside ring shares nothing.
 - **Right-click opens the window context menu** — drawn by cce-desktop in
   process when it subscribes to `window-menu` (see the status socket), else
-  `scripts/cce-app-menu`, a `cce-cloud --json` popup like `cce-desktop-menu`
-  and cce-desktop's item menu.
+  `scripts/cce-app-menu`, a `cce-cloud --json` popup like `cce-desktop-menu`.
   It opens from a right-click on a handle disc in either adjust mode, and in
   **overview from a right-click anywhere on the window**, since the client
   never sees buttons there (`should_block_button`) and the press is the

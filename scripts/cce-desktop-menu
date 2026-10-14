@@ -6,7 +6,7 @@
 # the compositor only spawns this script while nobody does). Keep its rows in
 # step with cce-desktop/src/desktop_menu.rs.
 #
-# A `cce-cloud --json` popup, like cce-app-menu and cce-desktop's item menu. The
+# A `cce-cloud --json` popup, like the cce-app-menu fallback. The
 # compositor (cursor.rs, the background right-click) passes the FOCUSED
 # window as `-i <id> -a <app_id>` when there is one whose mode can be set:
 # it drops focus right after the spawn so the popup can take the keyboard,
