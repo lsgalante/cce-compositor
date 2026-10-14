@@ -42,8 +42,10 @@ what *installs* ccebuild, so it cannot depend on it already being present.
 
 This crate owns **`ccebuild`**, the entry point for building and installing the whole
 workspace (see the workspace guide `./WORKSPACE.md` for the full command list). It lives here
-because this crate already ships helper scripts to `~/.local/bin`, and because the
-workspace root is not a git repo so nothing there can be versioned.
+because this crate already ships helper scripts to `~/.local/bin`. The workspace root is a
+git repo too, but a deliberately narrow one: it versions only what ties the crates
+together (`Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, `CLAUDE.md`, `bump-revs.sh`)
+and installs nothing, so a tool meant for `~/.local/bin` belongs in a crate.
 
 It derives every binary from `cargo metadata` instead of hand-written lists — the
 per-crate Makefiles used to name their binaries manually, which silently left crates
