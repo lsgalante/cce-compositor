@@ -932,8 +932,13 @@ usage: ccebuild <command>
 
   build [PKG...]        cargo build --release --workspace (or -p each PKG),
                         recording each binary's build time
-  install [--no-build]  build, then install every bin target, helper script
-                        and user unit (derived from cargo metadata)
+  install [--no-build] [PKG...]
+                        build, then install every bin target, helper script,
+                        user unit, D-Bus/portal file and desktop entry (derived
+                        from cargo metadata); PKG...: only those crates' — the
+                        safe form when other sessions are working (app icons
+                        are always the whole shared set). --no-build installs
+                        what is already built.
   status                show built-vs-installed drift, and running processes
                         that are not on their installed binary
   restart [--all] [PKG...]
