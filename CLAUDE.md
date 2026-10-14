@@ -12,7 +12,8 @@ license, `SPDX-FileCopyrightText: © 2020 The River Developers` headers, and riv
 protocol XML files you'll see throughout `src/server/` and `protocol/`.
 
 This crate lives inside a larger Cargo workspace (the workspace root is the **parent**
-directory `../Cargo.toml`, which lists ~20 `cce-*` sibling apps). This crate is the
+directory `../Cargo.toml`, which lists some 40 `cce-*` sibling crates, apps and shared
+libraries alike). This crate is the
 compositor; the siblings (`cce-status-interface`, `cce-system-interface`, etc.) are
 clients that talk to it over its sockets. Intra-workspace dependencies: `cce-ui`
 (`../cce-ui`, config helpers) and **`cce-window-manager`** (`../cce-window-manager`,
