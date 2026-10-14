@@ -784,7 +784,7 @@ takes an id.
 from inside `Output::manage_start`; that now returns true for a destroyed
 output and the manage pass removes it from the store. Iteration is in
 creation order, as the list's was (several walks take the first enabled
-output: `first_enabled_ptr()`). `ptrs()` is a copied list of addresses
+output: `first_enabled()`, a borrow). `ptrs()` is a copied list of addresses
 for the walks not yet converted to borrows; `values()`, `get` and
 `get_mut` borrow. `PendingScreenshot` names its output by id.
 **Seats likewise** (`wm.seats`,
