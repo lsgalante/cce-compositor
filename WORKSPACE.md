@@ -110,15 +110,25 @@ the crates. It ships in `cce-compositor/scripts/ccebuild` and installs to
 `~/.local/bin`:
 
 ```sh
-ccebuild install            # build the workspace, install every binary + unit
-ccebuild install cce-mail  # just one package (what each crate's `make install` runs)
-ccebuild restart            # restart user services left on a replaced binary
-ccebuild status             # built-vs-installed drift, AND running-vs-installed
-ccebuild prune              # target/ artifacts of crates cargo no longer knows
-ccebuild install-system     # the root-owned binaries, units, PAM stacks, udev rules (one sudo prompt; --dry-run to preview)
+ccebuild install cce-mail             # build one package (release), install its binaries, scripts, units, desktop entries
+ccebuild install --no-build cce-mail  # install what is already built (each crate's `make install`, after its own build)
+ccebuild restart cce-mail             # restart that crate's user services still on a replaced binary
+ccebuild status                       # built-vs-installed drift, AND running-vs-installed (read-only)
+ccebuild prune                        # list target/ artifacts of crates cargo no longer knows (--apply deletes)
+ccebuild install-system --dry-run     # preview the root-owned binaries, units, PAM stacks, udev rules
 ```
 
-The full deploy loop is `ccebuild install && ccebuild restart`. `ccebuild` derives
+**Always name the crate.** Other sessions are usually working in sibling crates, and
+the bare forms reach their work too: `ccebuild install` builds and deploys every
+crate's current tree, half-finished changes included, and `ccebuild restart` bounces
+services another session installed but is not ready to restart (see "Concurrent
+sessions"). The deploy loop is `ccebuild install <crate> && ccebuild restart <crate>`;
+keep the bare forms for when you know you are the only one working. `install-system`
+has no per-crate form — it updates every crate's root-owned artifacts in one batch
+(one sudo/pkexec prompt) — so preview with `--dry-run` and run it only when every
+change it would make is one you own.
+
+`ccebuild` derives
 every binary from `cargo metadata`, which is the point: the per-crate Makefiles used
 to name their binaries by hand, so crates with extra `[[bin]]` targets shipped
 incomplete for weeks (`cce-ui` without `cce-relief`, `cce-display-manager` without its
