@@ -776,6 +776,9 @@ impl WindowManager {
                 target.close();
                 format!("ok {}\n", title)
             }
+            // restart-app [--force] [app_id|id] — close an app's windows,
+            // wait for it to exit, start it again (`restart_app.rs`).
+            "restart-app" => self.restart_app_command(&parts),
             "move-window" => {
                 // move-window <square> [app_id|id] — put a window on a named
                 // desktop square (chess style, e.g. "C-9"). With no app_id the

@@ -1042,6 +1042,7 @@ impl Server {
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.pending_ipc_reply), None);
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.pending_screenshot), None);
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.settle_waiters), Vec::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.app_restarts), Vec::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.startup), Vec::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.startup_pids), Vec::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.status_sender), None);

@@ -155,6 +155,8 @@ mod ipc_commands;
 use ipc_commands::parse_finite;
 #[path = "window_manager/config_apply.rs"]
 mod config_apply;
+#[path = "window_manager/restart_app.rs"]
+mod restart_app;
 
 /// A focus-next/prev cycle under way (`WindowManager::focus_cycle`).
 pub struct FocusCycle {
@@ -261,6 +263,12 @@ pub struct WindowManager {
     /// Polls `settle_waiters`; created on the first wait, armed while any
     /// waiter is left.
     pub settle_timer: crate::event_source::Timer,
+    /// `restart-app`s waiting for their process to exit
+    /// (`window_manager/restart_app.rs`).
+    pub app_restarts: Vec<crate::app_restart::PendingRestart>,
+    /// Polls `app_restarts`; created on the first restart, armed while any
+    /// is left.
+    pub app_restart_timer: crate::event_source::Timer,
     pub startup: Vec<crate::config::StartupConfig>,
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
@@ -612,6 +620,7 @@ impl WindowManager {
         self.pending_ipc_reply = None;
         self.pending_ipc_peer_pid = 0;
         self.settle_timer = crate::event_source::Timer::new();
+        self.app_restart_timer = crate::event_source::Timer::new();
         crate::shared::shared().store_mode(WindowManagerMode::Normal);
         self.on_app_exit = crate::config::OnAppExit::FocusPrevious;
         self.grid_cells_enabled = true;
@@ -877,6 +886,10 @@ impl WindowManager {
         // Dropping a waiter drops its reply channel: the caller is told the
         // command timed out rather than left hanging.
         self.settle_waiters.clear();
+        // Same for a pending restart's caller; the app it closed stays
+        // closed — the session is ending anyway.
+        self.app_restart_timer.remove();
+        self.app_restarts.clear();
         self.restore_placeholder_timer.remove();
         // Placeholder rects go down with the scene; only the bookkeeping.
         // Released, not dropped: dropping a handle would destroy its rect

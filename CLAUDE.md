@@ -2070,6 +2070,19 @@ headless seat has no keyboard and Chromium crashes in
   status and stream sockets read their subscription line through
   `read_line_bounded` (total deadline and size cap): a per-read timeout let a
   byte-a-second client hold the thread that serves every other subscriber.
+- **`restart-app [--force] [app_id|id]`** (since 2026-10-14; `app_restart.rs`
+  for the process side, `window_manager/restart_app.rs` for the windows)
+  restarts the app behind a window (focused if omitted). It snapshots
+  `/proc/<pid>` first (argv, environ, cwd, exe minus " (deleted)"), closes
+  *every* window of that pid (not a signal: cce-ui has no SIGTERM handler,
+  so a kill skips `on_exit` autosave), waits on a pidfd, then execs the twin
+  on whatever binary is now at that path — the post-`ccebuild install` case.
+  A process in a user `.service` cgroup gets `systemctl --user start <unit>`
+  instead of a second copy outside the unit. The reply is held (like
+  `screenshot`/`lock`; `ipc_server.rs` gives it a 15 s leash): `ok restarted
+  <name> (pid A -> B)`, or after `GRACE_MS` (10 s) an error that leaves the
+  app alone (a save prompt) — `--force` instead SIGTERMs, then SIGKILLs 3 s
+  on. Verified in a shadow, SIGSTOP standing in for a stuck app.
 - **Status socket** `/tmp/cce-status-interface-{WAYLAND_DISPLAY}.sock` (`status_server.rs`): runs
   on its own thread; a client sends one subscription line (`layout`, `title`,
   `modifiers`, `dismiss`, …) and receives text lines on every

@@ -277,8 +277,15 @@ fn handle_client(mut stream: UnixStream, tx: IpcSender) {
                 // thread holds logind's sleep (5s at most) on that reply.
                 // `focus-window --wait` answers once the window holds still,
                 // `SETTLE_TIMEOUT_MS` (3s) at most.
+                // `restart-app` answers once the app has exited and started
+                // again: `app_restart::GRACE_MS` for it to exit, plus the
+                // SIGTERM-to-SIGKILL wait under `--force`, plus a margin.
                 let timeout = if cmd.starts_with("screenshot") {
                     std::time::Duration::from_secs(5)
+                } else if cmd.starts_with("restart-app") {
+                    std::time::Duration::from_millis(
+                        crate::app_restart::GRACE_MS + crate::app_restart::KILL_AFTER_TERM_MS + 2_000,
+                    )
                 } else if cmd == "lock" || cmd.starts_with("focus-window --wait") {
                     std::time::Duration::from_secs(4)
                 } else {

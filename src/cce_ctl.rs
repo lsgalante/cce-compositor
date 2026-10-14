@@ -66,7 +66,10 @@ fn usage(name: &str, to_stderr: bool) {
     print("  status-hide-mode [true|false]");
     print("  adjust-position-mode [true|false|query]");
     print("  exit [force]               # log out; waits for windows to close, cancels if one stays (a save prompt); force skips the wait");
-    print("  restart");
+    print("  restart-app [--force] [app_id|id]  # close the app's windows (focused if omitted), wait for it to");
+    print("                              # exit, start it again: same argv/env/cwd, on the binary now at its");
+    print("                              # path (a unit: systemctl --user start). Replies when it has started;");
+    print("                              # 10s to exit, else gives up — --force then SIGTERMs (SIGKILL 3s on)");
     print("  restart-compositor        # exit cleanly; cce-display-manager relaunches the session");
     print("  reload");
     print("  repeat [<rate> <delay>]    # key repeat for hardware keyboards: repeats/s (0 = off), ms before the first; until the next config load. No args prints it");

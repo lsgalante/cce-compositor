@@ -28,6 +28,8 @@ pub mod reentry;
 mod window_macros;
 #[path = "server/process.rs"]
 pub mod process;
+#[path = "server/app_restart.rs"]
+pub mod app_restart;
 #[path = "server/util.rs"]
 pub mod util;
 pub use cce_window_manager::slotmap;

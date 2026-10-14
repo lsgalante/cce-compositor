@@ -496,8 +496,12 @@ the others. The rules:
   `ccebuild restart` is unscoped: it restarts every user service running a
   replaced binary, including apps another session has installed but is not
   ready to restart. The per-crate form restarts only units shipped by the
-  named crate(s). Apps that are not services restart by pid, not name:
-  `pkill -x` matches the kernel comm name, which is truncated to 15
+  named crate(s). Apps that are not services: `ccectl restart-app
+  <app_id|id>` (a compositor built 2026-10-14 or later — the session's
+  compositor only changes at login) closes the app's windows, waits for it
+  to exit and relaunches it with the same argv, environment and cwd on the
+  freshly installed binary, replying when it is back. Without it they
+  restart by pid, not name: `pkill -x` matches the kernel comm name, which is truncated to 15
   characters, so it silently matches NOTHING for most `cce-*` binary
   names ("cce-status-interface" is 20) — a "kill then relaunch" built on
   it relaunches beside the survivor and doubles the app. Find the pid
