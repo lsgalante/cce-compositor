@@ -77,6 +77,7 @@ def mode($text; $id): btn((if $id == $current then "● " else "○ " end) + $te
     {title: $app_id, justify: "left", widgets: [
         btn("Window Mode"; "mode_page") + {target_page: 1},
         btn("Minimize"; "minimize"),
+        btn("Restart App"; "restart"),
         btn("Close Window"; "close")
     ]},
     {title: "Window Mode", justify: "left", widgets: [
@@ -104,6 +105,11 @@ case "$btn" in
         # minimize/close act on the focused window: focus this one first.
         $CCE_CTL focus-window --no-wait "$window_index"
         $CCE_CTL minimize
+        ;;
+    "restart")
+        # By id: closes every window of its process, waits for it to exit,
+        # starts it again (a compositor from 2026-10-14 on).
+        $CCE_CTL restart-app "$window_index"
         ;;
     "close")
         $CCE_CTL focus-window --no-wait "$window_index"
