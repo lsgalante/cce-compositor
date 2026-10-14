@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # cce-desktop-menu — Context menu for CCE desktop background
 #
+# The FALLBACK: cce-grid draws this menu itself, in process, whenever it is
+# running (it subscribes to the compositor's `desktop-menu` status topic, and
+# the compositor only spawns this script while nobody does). Keep its rows in
+# step with cce-grid/src/desktop_menu.rs.
+#
 # A `cce-cloud --json` popup, like cce-app-menu and cce-grid's item menu. The
 # compositor (cursor.rs, the background right-click) passes the FOCUSED
 # window as `-i <id> -a <app_id>` when there is one whose mode can be set:

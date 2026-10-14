@@ -677,19 +677,18 @@ impl WindowManager {
                 // come from the arrange pass exactly as they do for the key.
                 // The internal roles (popup/overlay/status/utility) are
                 // deliberately not settable here; `mode` rules cover those.
-                if parts.len() < 2 {
+                let Some(cce_core::ipc::ctl::Request::SetMode { mode, window }) = cce_core::ipc::ctl::Request::parse(cmd) else {
                     return "error: usage: set-mode <floating|tiled|fullscreen> [app_id|id]\n".to_string();
-                }
-                let mode = match parts[1].to_lowercase().as_str() {
+                };
+                let mode = match mode.as_str() {
                     "floating" => crate::tiling::TilingMode::Floating,
                     "tiled" => crate::tiling::TilingMode::Tiled,
                     "fullscreen" => crate::tiling::TilingMode::Fullscreen,
                     other => return format!("error: unknown mode: {} (floating|tiled|fullscreen)\n", other),
                 };
-                let target = if parts.len() >= 3 {
-                    self.find_window_id(&parts[2..].join(" "))
-                } else {
-                    self.focused_window()
+                let target = match window {
+                    Some(query) => self.find_window_id(&query),
+                    None => self.focused_window(),
                 };
                 let Some(id) = target else {
                     return "error: no target window\n".to_string();
@@ -1220,9 +1219,10 @@ impl WindowManager {
                 out
             }
             "spawn" => {
-                if parts.len() < 2 { return "error: missing command\n".to_string(); }
-                let cmd = parts[1..].join(" ");
-                self.execute_action(&crate::config::Action::Spawn, Some(&cmd));
+                let Some(cce_core::ipc::ctl::Request::Spawn { command }) = cce_core::ipc::ctl::Request::parse(cmd) else {
+                    return "error: missing command\n".to_string();
+                };
+                self.execute_action(&crate::config::Action::Spawn, Some(&command));
                 "ok\n".to_string()
             }
             "layout" => {

@@ -363,10 +363,14 @@ impl LayerSurface {
     }
 
     /// Whether its namespace marks it as cce-cloud chrome — the launcher
-    /// and the desktop/app context menus. These are screen-anchored popups
-    /// that stay interactive during overview and dismiss on click-away.
+    /// and the desktop/app context menus — or as a cce-ui menu layer
+    /// (`cce-menu`: the desktop grid's menus, which cannot ride its
+    /// camera-scaled surface; cce-ui `backend/menu_layer.rs`). These are
+    /// screen-anchored popups that stay interactive during overview and
+    /// dismiss on click-away: a press elsewhere drops their keyboard focus,
+    /// and they close on the leave.
     pub fn is_cloud(&self) -> bool {
-        self.wlr_layer_surface.with_namespace(|ns| ns.starts_with("cce-cloud"))
+        self.wlr_layer_surface.with_namespace(|ns| ns.starts_with("cce-cloud") || ns.starts_with("cce-menu"))
     }
 
     /// Whether a click or touch on it may give it keyboard focus. Not when

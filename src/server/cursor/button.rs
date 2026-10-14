@@ -449,14 +449,11 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             if !clicked_interactive {
                 let cursor = cursor_mut!(wm, sid);
                 cursor.right_click_on_bg = true;
-                let x = cursor.x() as i32;
-                let y = cursor.y() as i32;
-                let home = std::env::var("HOME").unwrap_or_default();
-                let mut cmd = format!("{}/.local/bin/cce-desktop-menu -x {} -y {}", home, x, y);
+                let (cx, cy) = (cursor.x(), cursor.y());
                 // The menu's "Window Mode" page acts on the FOCUSED window,
-                // and focus is dropped right below (so the popup takes the
+                // and focus is dropped right below (so the menu takes the
                 // keyboard and a click-away dismisses it) — by the time the
-                // script asks `ccectl windows` nothing is focused. Hand it
+                // menu could ask `ccectl windows` nothing is focused. Hand it
                 // the window here instead. Only a window whose mode
                 // `set-mode` accepts is worth naming.
                 let seat = seat_mut!(wm, sid);
@@ -464,23 +461,52 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     crate::seat::Focus::Window(id) => wm.windows.get(id),
                     _ => None,
                 };
-                if let Some(w) = focused {
-                    if matches!(
-                            w.tiling_mode,
-                            crate::tiling::TilingMode::Floating
-                                | crate::tiling::TilingMode::Tiled
-                                | crate::tiling::TilingMode::Fullscreen
-                        )
-                    {
-                        let app_id = w.get_app_id_string().unwrap_or_else(|| "unknown".to_string());
-                        cmd.push_str(&format!(
-                            " -i {} -a '{}'",
-                            w.id().ipc(),
-                            app_id.replace('\'', "'\\''")
-                        ));
+                let menu_window = focused.and_then(|w| {
+                    let mode = match w.tiling_mode {
+                        crate::tiling::TilingMode::Floating => "floating",
+                        crate::tiling::TilingMode::Tiled => "tiled",
+                        crate::tiling::TilingMode::Fullscreen => "fullscreen",
+                        _ => return None,
+                    };
+                    Some(cce_core::ipc::ctl::MenuWindow {
+                        id: w.id().ipc(),
+                        mode: mode.to_string(),
+                        app_id: w.get_app_id_string().unwrap_or_else(|| "unknown".to_string()),
+                    })
+                });
+                // The desktop client (cce-grid) opens the menu itself when it
+                // listens: in process, at the press, on the press's output.
+                // Without it, the `cce-desktop-menu` script does, through
+                // cce-cloud.
+                let listener = wm.status_sender.as_ref().filter(|s| s.has_desktop_menu());
+                if let Some(sender) = listener {
+                    let probe = ffi::wlr_box { x: cx.floor() as i32, y: cy.floor() as i32, width: 1, height: 1 };
+                    let (ox, oy) = wm
+                        .outputs
+                        .max_overlap_output(&probe)
+                        .map_or((0, 0), |o| {
+                            let b = o.wlr_output().layout_box();
+                            (b.x, b.y)
+                        });
+                    let (vx, vy) = wm.layout_to_virtual(cx, cy);
+                    let request = cce_core::ipc::ctl::DesktopMenuRequest {
+                        x: cx - ox as f64,
+                        y: cy - oy as f64,
+                        lx: cx,
+                        ly: cy,
+                        vx,
+                        vy,
+                        window: menu_window,
+                    };
+                    sender.send_desktop_menu(&request.to_string());
+                } else {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let mut cmd = format!("{}/.local/bin/cce-desktop-menu -x {} -y {}", home, cx as i32, cy as i32);
+                    if let Some(w) = menu_window {
+                        cmd.push_str(&format!(" -i {} -a '{}'", w.id, w.app_id.replace('\'', "'\\''")));
                     }
+                    wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
                 }
-                wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
                 crate::seat::Seat::focus_window(wm, sid, None);
                 crate::shared::pending().dirty_windowing();

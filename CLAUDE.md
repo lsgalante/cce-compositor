@@ -1435,10 +1435,11 @@ sat outside the edges and the ring that followed hugged them.
   mode rows lead with `"● "` / `"○ "` (drawn as the circle glyphs), and the
   page and Back rows carry only their words, cce-cloud adding the chevrons
   from `target_page` (see cce-cloud's CLAUDE.md, the `Json` mode). Not `ccectl mode`, which appends a persistent app_id rule.
-  `cce-desktop-menu` carries the same page for the FOCUSED window: the
-  background right-click passes it as `-i <id> -a <app_id>` (settable modes
-  only) because it drops focus right after the spawn, so the script could
-  not ask for it.
+  The background menu carries the same page for the FOCUSED window: the
+  background right-click names it — in the `desktop-menu` request to
+  cce-grid, or as `-i <id> -a <app_id>` to the fallback `cce-desktop-menu`
+  script (settable modes only) — because it drops focus right after, so the
+  menu could not ask for it.
 
 None of this is policy — `cce-window-manager` was untouched. The mode is
 already in `ActionCtx`, but what a *pointer* may grab is mechanism.
@@ -2077,6 +2078,20 @@ headless seat has no keyboard and Chromium crashes in
   **`selection`** is a one-shot topic too, for the desktop grid alone: the
   overview drag-selection carrying its images pushes `move <id>:<x>:<y>
   ...` per step and `drop` at the release (see "Overview drag-selection").
+
+  **`desktop-menu`** is one-shot as well, and decides who opens the
+  background menu. A right-click on the bare desktop (`handle_button`)
+  pushes one `cce_core::ipc::ctl::DesktopMenuRequest` line — the press on its
+  output, in layout coordinates and on the desk, plus the focused window
+  the press is about to drop (id, mode, app_id) when its mode can be set —
+  WHILE anyone subscribes (`StatusSender::has_desktop_menu`, a count the
+  server thread keeps after every wake). cce-grid subscribes and draws the
+  menu in process, on a cce-ui menu layer (namespace `cce-menu`, which
+  `LayerSurface::is_cloud` counts with cce-cloud's: interactive in
+  overview, closed by the focus drop of a click elsewhere). With no
+  subscriber the press spawns `scripts/cce-desktop-menu` as before, a
+  `cce-cloud --json` popup with the same rows. A subscriber that died since
+  the thread last woke still counts and that one click opens nothing.
 
   **`clickaway`** is a one-shot topic (like `dismiss` and `shortcuts`): a
   `press` line for each button press that lands on NO X11 surface while some

@@ -3,7 +3,8 @@
 // Runs in a dedicated thread. cce-status connects to
 // /tmp/cce-status-interface-{WAYLAND_DISPLAY}.sock, sends a subscription line
 // ("layout", "title", "modifiers", "adjust", "dismiss", "shortcuts",
-// "clickaway" or "selection") and receives lines whenever the status changes.
+// "clickaway", "selection" or "desktop-menu") and receives lines whenever the
+// status changes.
 //
 // The main loop sends updates through an mpsc channel. The server thread
 // owns the socket and handles all I/O independently of the Wayland event loop.
@@ -11,6 +12,7 @@
 use std::io::Write;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -59,6 +61,12 @@ pub enum StatusMsg {
     /// group move steps, then `drop` at its release. See
     /// [`crate::selection`].
     Selection(String),
+    /// A right-click on the bare desktop, for the desktop client to open its
+    /// menu at: one `cce_core::ipc::ctl::DesktopMenuRequest` line for every
+    /// `desktop-menu` subscriber (in practice the grid). Sent only while
+    /// [`StatusSender::has_desktop_menu`]; the background right-click spawns
+    /// the `cce-desktop-menu` script otherwise.
+    DesktopMenu(String),
 }
 
 /// Subscription types that the status bar script can request.
@@ -80,6 +88,9 @@ enum Subscription {
     /// `selection` — one-shot group-move lines for the desktop images
     /// (see `StatusMsg::Selection`); never receives state pushes.
     Selection,
+    /// `desktop-menu` — one-shot background right-clicks (see
+    /// `StatusMsg::DesktopMenu`); never receives state pushes.
+    DesktopMenu,
     Unknown,
 }
 
@@ -98,6 +109,7 @@ impl Subscription {
             Some(T::Shortcuts) => Subscription::Shortcuts,
             Some(T::ClickAway) => Subscription::ClickAway,
             Some(T::Selection) => Subscription::Selection,
+            Some(T::DesktopMenu) => Subscription::DesktopMenu,
             None => Subscription::Unknown,
         }
     }
@@ -175,6 +187,10 @@ impl Client {
 pub struct StatusSender {
     tx: mpsc::Sender<StatusMsg>,
     wake: Arc<OwnedFd>,
+    /// How many `desktop-menu` subscribers the server thread holds, as of
+    /// its last wake — kept by the thread, read by the main loop to decide
+    /// who opens the background menu.
+    desktop_menu_subscribers: Arc<AtomicUsize>,
 }
 
 impl StatusSender {
@@ -205,6 +221,22 @@ impl StatusSender {
     /// Report a press that missed every X11 surface (`StatusMsg::ClickAway`).
     pub fn send_click_away(&self) {
         if self.tx.send(StatusMsg::ClickAway).is_ok() {
+            wake_fd(&self.wake);
+        }
+    }
+
+    /// Whether a desktop client is listening for background right-clicks.
+    /// A subscriber that died since the server thread last woke still
+    /// counts, and its one click opens nothing; the thread reaps it on the
+    /// hangup, so the next one falls back.
+    pub fn has_desktop_menu(&self) -> bool {
+        self.desktop_menu_subscribers.load(Ordering::Relaxed) > 0
+    }
+
+    /// Ask the desktop client to open its background menu
+    /// (`StatusMsg::DesktopMenu`).
+    pub fn send_desktop_menu(&self, line: &str) {
+        if self.tx.send(StatusMsg::DesktopMenu(line.to_string())).is_ok() {
             wake_fd(&self.wake);
         }
     }
@@ -260,15 +292,17 @@ pub fn spawn_status_server(display_socket: Option<String>) -> StatusSender {
     let (tx, rx) = mpsc::channel::<StatusMsg>();
     let wake = new_wake_fd().expect("failed to create status wake eventfd");
     let thread_wake = wake.clone();
+    let desktop_menu_subscribers = Arc::new(AtomicUsize::new(0));
+    let thread_count = desktop_menu_subscribers.clone();
 
     std::thread::Builder::new()
         .name("cce-status-server".into())
         .spawn(move || {
-            status_server_main(rx, thread_wake, display_socket);
+            status_server_main(rx, thread_wake, thread_count, display_socket);
         })
         .expect("failed to spawn status server thread");
 
-    StatusSender { tx, wake }
+    StatusSender { tx, wake, desktop_menu_subscribers }
 }
 
 /// Block until the wake eventfd, the listener, or any subscriber socket is
@@ -299,7 +333,12 @@ fn wait_for_activity(wake: &OwnedFd, listener: &UnixListener, clients: &[Client]
     Some((ready(&fds[0]), ready(&fds[1]), fds[2..].iter().map(ready).collect()))
 }
 
-fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display_socket: Option<String>) {
+fn status_server_main(
+    rx: mpsc::Receiver<StatusMsg>,
+    wake: Arc<OwnedFd>,
+    desktop_menu_subscribers: Arc<AtomicUsize>,
+    display_socket: Option<String>,
+) {
     let socket_path = get_status_socket_path(display_socket.as_deref());
     // Remove stale socket
     let _ = std::fs::remove_file(&socket_path);
@@ -431,6 +470,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
         let mut shortcut_events: Vec<String> = Vec::new();
         let mut clickaway_events: Vec<String> = Vec::new();
         let mut selection_events: Vec<String> = Vec::new();
+        let mut desktop_menu_events: Vec<String> = Vec::new();
         loop {
             match rx.try_recv() {
                 Ok(StatusMsg::State(update)) => {
@@ -448,6 +488,9 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
                 }
                 Ok(StatusMsg::Selection(line)) => {
                     selection_events.push(line);
+                }
+                Ok(StatusMsg::DesktopMenu(line)) => {
+                    desktop_menu_events.push(line);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -484,6 +527,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
         push_one_shot(&mut clients, &Subscription::Shortcuts, &shortcut_events);
         push_one_shot(&mut clients, &Subscription::ClickAway, &clickaway_events);
         push_one_shot(&mut clients, &Subscription::Selection, &selection_events);
+        push_one_shot(&mut clients, &Subscription::DesktopMenu, &desktop_menu_events);
 
         // If we got a new update, push it to all clients
         if has_new_update {
@@ -499,6 +543,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
                             | Subscription::Shortcuts
                             | Subscription::ClickAway
                             | Subscription::Selection
+                            | Subscription::DesktopMenu
                     ) {
                         continue;
                     }
@@ -524,6 +569,11 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
                 }
             }
         }
+
+        // Every arrival and every reap above happens in this turn, so the
+        // count the main loop reads is as fresh as the thread's own view.
+        let n = clients.iter().filter(|c| c.subscription == Subscription::DesktopMenu).count();
+        desktop_menu_subscribers.store(n, Ordering::Relaxed);
     }
 }
 
@@ -551,6 +601,7 @@ fn format_for_subscription(sub: &Subscription, update: &StatusUpdate) -> String 
         | Subscription::Shortcuts
         | Subscription::ClickAway
         | Subscription::Selection
+        | Subscription::DesktopMenu
         | Subscription::Unknown => String::new(),
     }
 }

@@ -341,13 +341,16 @@ types (`ccectl zoom-in`) stay plain lines the compositor parses itself.
   `ccectl` binary (in `cce-compositor/`) is the CLI client; run `ccectl` with no args for the
   command list.
 - **Status**: `/tmp/cce-status-interface-{WAYLAND_DISPLAY}.sock` — subscribe to `layout` /
-  `title` / `modifiers` / `adjust` / `dismiss` / `selection`
+  `title` / `modifiers` / `adjust` / `dismiss` / `selection` / `desktop-menu`
   and receive push updates. `adjust` is "on"/"off" as window-adjust mode
   (overview, or Super held) comes and goes — what `cce-grid` keys its image
   resize handles on. `selection` is the other grid-facing topic: the overview
   drag-selection carrying the grid's images tells it where they went
   (`move <id>:<x>:<y> ...`, then `drop`); the grid reports the images it holds
-  the other way, with `grid-items` on the control socket.
+  the other way, with `grid-items` on the control socket. `desktop-menu` hands
+  the grid the background right-click (`ctl::DesktopMenuRequest`), so it draws
+  the desktop menu in process; with no subscriber the compositor spawns the
+  `cce-desktop-menu` script instead.
   This feeds `cce-status-interface` (the status bar). (The `viewport` topic
   went with the viewport-tag feature; the per-segment `backdrop` topic went
   2026-10-01, when the bar's text contrast moved to compositor-side backdrop
