@@ -1733,10 +1733,10 @@ unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: 
 
 // A directional swipe bind fires once the accumulated travel (libinput
 // units) passes `window_manager { swipe_threshold }`
-// (`WindowManager::swipe_threshold`, default 70). Until then the camera
+// (`Layout::swipe_threshold`, default 70). Until then the camera
 // *peeks*: it pans toward the swipe direction in proportion to the
 // travel, up to `window_manager { swipe_peek }` screen px
-// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
+// (`Layout::swipe_peek_px`, default 60) at the threshold, and
 // eases back if the fingers lift short of it — so a hesitant
 // three-finger swipe shows where it would go without going. Firing does
 // not end the swipe: the travel restarts from zero, and each further
