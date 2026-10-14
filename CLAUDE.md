@@ -817,8 +817,8 @@ protocol-object lists, and the relay's input-method popups — every one of
 those runs only for real hardware, a client of the river input-config
 protocols (none in this workspace), or an input method (since 2026-10-12
 the `ime` verify client is one, so the relay's popups can be tested). wlroots' own lists stay `wl_list`s: C owns them. A container
-that is zero-filled (`Server::default`, a `Default` returning
-`mem::zeroed()`) must WRITE each registry before the value is assumed
+that is zero-filled (`Server::zeroed`, an `unsafe fn` that zero-fills it)
+must WRITE each registry before the value is assumed
 initialised: a zeroed `Vec` is invalid.
 
 **No struct holds a server back-pointer** (RFC step 4, done 2026-10-11).
@@ -1057,7 +1057,7 @@ takes `wm` (`Window::map`/`unmap`/`create`, placement and restore,
 and placement, the OSK, idle lock, keyboard builtins, …). `Server` methods
 borrow the field instead (`Server::deinit` passes `&mut self.wm` beside
 `&mut self.input_manager` — disjoint fields, no `unsafe`), and
-`Server::default` writes the window manager's fields through
+`Server::zeroed` writes the window manager's fields through
 `addr_of_mut!` raw places, not through `reentry::wm`. An entry point with
 no object leading to the server (a keyboard group without a seat) uses
 `crate::shared::server_ptr()`. A new callback fetches once at its top; a
@@ -1563,7 +1563,7 @@ same.
 **Swipe binds peek before they fire.** A three-finger swipe bound to a
 directional focus or pan (`focus_left (gesture)"swipe3_left"` in input.kdl)
 fires once the accumulated travel passes `window_manager { swipe_threshold }`
-(libinput units, default 70; `WindowManager::swipe_threshold`; it was 50
+(libinput units, default 70; `Layout::swipe_threshold`; it was 50
 until 2026-09-24, when a replay of logged swipes showed every deliberate
 first step travelling 75 or more, so 70 drops only hesitant ones). Short of
 that the camera *leans* toward the bind the
@@ -1576,7 +1576,7 @@ leans diagonally. A swipe within 15° of an axis
 sideways drift leaning the camera was a wobble, and the turn off the axis
 is smooth past that band. The size is proportional to the travel —
 `window_manager { swipe_peek }` screen px at the threshold (default 60, 0
-disables; `WindowManager::swipe_peek_px` — not under `input`, whose
+disables; `Layout::swipe_peek_px` — not under `input`, whose
 config.kdl block input.kdl's replaces wholesale), clamped there — and eases
 back to where it started if the fingers lift first (`handle_swipe_end`), so
 a hesitant swipe shows where it would go without going. With animations
@@ -1585,7 +1585,7 @@ bind fires and the step's pan lands at once. **A fire does
 not end the swipe** (since 2026-09-24): the accumulated travel restarts
 from zero at the fire, and a further `window_manager {
 swipe_repeat_threshold }` of travel (libinput units, default four times
-`swipe_threshold`; `WindowManager::swipe_repeat_threshold`) without
+`swipe_threshold`; `Layout::swipe_repeat_threshold`) without
 lifting fires again — for a focus or pan bind (`action_navigates`) only:
 any other swipe bind, the four-finger overview toggle included, fires
 once per gesture and the rest of it is ignored (`Cursor::swipe_spent`).
@@ -1594,7 +1594,7 @@ resistance after the first step so it does not run on through the next
 window — and a reversal after a step goes straight back. The lean
 toward a further step is smaller too: it reaches `window_manager {
 swipe_repeat_peek }` (screen px, default half of `swipe_peek`;
-`WindowManager::swipe_repeat_peek_px`) at the repeat threshold, so it
+`Layout::swipe_repeat_peek_px`) at the repeat threshold, so it
 moves far more slowly per unit of travel than the first step's lean. The factor was
 two at first and read as too eager: replaying a session's logged swipes
 (every `handle_swipe_update` is logged at info with its delta, in
