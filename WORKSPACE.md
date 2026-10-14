@@ -84,6 +84,15 @@ every crate then builds a fetched copy of the toolkit instead of the tree.
 rev from GitHub itself, and refuses while the dependency's work tree is dirty
 or ahead of origin.
 
+The per-crate **`.cargo/config.toml` that set `net.git-fetch-with-cli = true`
+is gone** (removed from all 28 crates that carried it, 2026-10-13). It was there
+only because git.lucas.co speaks dumb HTTP, which Cargo's built-in git client
+rejects ("invalid content-type"); GitHub speaks smart HTTP, and a fresh clone
+with an empty `CARGO_HOME` fetches every git dep without it. Do not restore it,
+and do not point a pin back at git.lucas.co — that would bring the failure back.
+The only crate-level `.cargo/config.toml` files left are `cce-ui`'s and
+`cce-vault-web`'s, which set wasm rustflags and are unrelated.
+
 Consequences to respect:
 - **Commit crate changes inside the crate's own repo.** The root repo tracks only the
   workspace files above; its glob `.gitignore` is what keeps the crates out of it, so
