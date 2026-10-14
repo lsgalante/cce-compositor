@@ -28,6 +28,11 @@ done
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export XDG_CURRENT_DESKTOP=cce
 export XDG_SESSION_TYPE=wayland
+# Imported into the systemd user manager below: user services otherwise run
+# with the manager's /usr/local/bin:/usr/bin, so a .desktop Exec= naming a
+# ~/.local/bin launcher fails under them. Dropbox's xdg-open of its sign-in
+# link found cce-browser.desktop but not cce-browser-open, and reported
+# "no method available" (2026-10-14).
 export PATH="$HOME/.local/bin:$PATH"
 export XCURSOR_THEME="cce"
 # No XCURSOR_SIZE. Wayland toolkits already default to 24 logical pixels (sctk,
@@ -140,7 +145,7 @@ fi
 # literal '$CCE_BIN' and the client would never start.
 cat > "$CCE_LAUNCH" << LAUNCH_EOF
 #!/bin/sh
-systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK RUSTICL_ENABLE VK_DRIVER_FILES __EGL_VENDOR_LIBRARY_FILENAMES${TERMINAL:+ TERMINAL}
+systemctl --user import-environment PATH DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK RUSTICL_ENABLE VK_DRIVER_FILES __EGL_VENDOR_LIBRARY_FILENAMES${TERMINAL:+ TERMINAL}
 systemctl --user start cce-session.target
 ${DEBUG_FLAG}exec "$CCE_BIN" client 2>"$CCE_CLIENT_LOG"
 LAUNCH_EOF
