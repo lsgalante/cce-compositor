@@ -365,7 +365,7 @@ types (`ccectl zoom-in`) stay plain lines the compositor parses itself.
   listener for every client after it. Don't copy either into an app again.
   The cce-notes protocol in particular lives in `cce_vault::notes_ipc`
   (`Command`, the `current`/`vault` queries, and `open`, the bounded off-thread
-  hand-off cce-graph, cce-grid and cce-list use).
+  hand-off cce-graph, cce-grid and cce-calendar use).
 
 ## Window fades (DE-wide open/close dissolve)
 
