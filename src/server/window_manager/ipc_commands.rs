@@ -1594,12 +1594,19 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "pointer-location" => {
-                let mut reply = "error: no seat\n".to_string();
-                if let Some(seat) = self.seats.values().next() {
-                    let cursor = &seat.cursor;
-                    reply = format!("x={} y={}\n", cursor.x(), cursor.y());
-                }
-                reply
+                // Layout px, then the output under the pointer and the point
+                // on it: a client opening a menu on that output (cce-desktop's
+                // item menu) needs both.
+                let Some(seat) = self.seats.values().next() else {
+                    return "error: no seat\n".to_string();
+                };
+                let (x, y) = (seat.cursor.x(), seat.cursor.y());
+                let probe = ffi::wlr_box { x: x.floor() as i32, y: y.floor() as i32, width: 1, height: 1 };
+                let on = self.outputs.max_overlap_output(&probe).map(|o| {
+                    let b = o.wlr_output().layout_box();
+                    (o.wlr_output().name(), x - b.x as f64, y - b.y as f64)
+                });
+                cce_core::ipc::ctl::pointer_location_reply(x, y, on.as_ref().map(|(n, ox, oy)| (n.as_str(), *ox, *oy)))
             }
             // One-direction key events (held modifiers/keys); `keycode` is the evdev
             // code. Like `keypress`, this notifies the focused client directly and does

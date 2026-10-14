@@ -2096,7 +2096,8 @@ headless seat has no keyboard and Chromium crashes in
   **`desktop-menu`** is one-shot as well, and decides who opens the
   background menu. A right-click on the bare desktop (`handle_button`)
   pushes one `cce_core::ipc::ctl::DesktopMenuRequest` line — the press on its
-  output, in layout coordinates and on the desk, plus the focused window
+  output (and that output's name, which the menu opens on), in layout
+  coordinates and on the desk, plus the focused window
   the press is about to drop (id, mode, app_id) when its mode can be set —
   WHILE anyone subscribes (`StatusSender::has_menu`, a count per menu topic
   the server thread keeps after every wake). **`window-menu`** does the same

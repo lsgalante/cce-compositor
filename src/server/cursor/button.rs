@@ -1225,8 +1225,8 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
 
 /// The request a right-click at layout `(lx, ly)` hands the desktop client
 /// (`desktop-menu` / `window-menu`): the point on its output — where a menu
-/// on that output's surface opens — in layout coordinates and on the desk,
-/// and the window it is about.
+/// on that output's surface opens — with the output's name, the point in
+/// layout coordinates and on the desk, and the window it is about.
 fn menu_request(
     wm: &crate::window_manager::WindowManager,
     lx: f64,
@@ -1234,10 +1234,10 @@ fn menu_request(
     window: Option<cce_core::ipc::ctl::MenuWindow>,
 ) -> cce_core::ipc::ctl::DesktopMenuRequest {
     let probe = ffi::wlr_box { x: lx.floor() as i32, y: ly.floor() as i32, width: 1, height: 1 };
-    let (ox, oy) = wm.outputs.max_overlap_output(&probe).map_or((0, 0), |o| {
+    let ((ox, oy), output) = wm.outputs.max_overlap_output(&probe).map_or(((0, 0), None), |o| {
         let b = o.wlr_output().layout_box();
-        (b.x, b.y)
+        ((b.x, b.y), Some(o.wlr_output().name()))
     });
     let (vx, vy) = wm.layout_to_virtual(lx, ly);
-    cce_core::ipc::ctl::DesktopMenuRequest { x: lx - ox as f64, y: ly - oy as f64, lx, ly, vx, vy, window }
+    cce_core::ipc::ctl::DesktopMenuRequest { x: lx - ox as f64, y: ly - oy as f64, lx, ly, vx, vy, output, window }
 }

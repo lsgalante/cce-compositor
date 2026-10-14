@@ -86,7 +86,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pbind <mods> <button> <action>");
     print("  retile");
     print("  mode <floating|tiled|fullscreen|popup|overlay> <app_id> [title]");
-    print("  pointer-location");
+    print("  pointer-location               # x= y= in layout px, then output=<name> ox= oy= (the output under it)");
     print("  camera                             (pan, zoom, and the pan target being eased to)");
     print("  selection                          (overview drag-selection: window ids, image ids, band)");
     print("  pointer-move-to <x> <y>            (layout pixels)");
