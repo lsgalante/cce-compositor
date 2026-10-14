@@ -474,7 +474,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         app_id: w.get_app_id_string().unwrap_or_else(|| "unknown".to_string()),
                     })
                 });
-                // The desktop client (cce-grid) opens the menu itself when it
+                // The desktop client (cce-desktop) opens the menu itself when it
                 // listens: in process, at the press, on the press's output.
                 // Without it, the `cce-desktop-menu` script does, through
                 // cce-cloud.
@@ -634,7 +634,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             let stores = stores!(wm);
             let zone = get_border_zone(window_ref!(wm, id), stores, lx, ly);
             // The window context menu (`scripts/cce-app-menu`, a cce-cloud
-            // popup like the desktop menu and cce-grid's item menu). A
+            // popup like the desktop menu and cce-desktop's item menu). A
             // right-click on a handle disc opens it in either adjust mode;
             // in OVERVIEW a right-click anywhere on the window does: the
             // client never sees buttons there (`should_block_button`), so
@@ -660,7 +660,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                     mode: this.tiling_mode.as_str().to_lowercase(),
                     app_id: this.get_app_id_string().unwrap_or_else(|| "unknown".to_string()),
                 };
-                // cce-grid draws the window's menu in process when it
+                // cce-desktop draws the window's menu in process when it
                 // listens (`window-menu`); the cce-app-menu script, a
                 // cce-cloud popup, otherwise.
                 let topic = crate::status_server::MenuTopic::Window;

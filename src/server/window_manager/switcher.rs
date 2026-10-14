@@ -16,9 +16,14 @@ impl WindowManager {
         if !matches!(w.state, crate::window::WindowState::Mapped) {
             return false;
         }
+        // The desktop (the grid client) by role: it may declare itself
+        // rather than match an app_id.
+        if w.is_grid() {
+            return false;
+        }
         match w.get_app_id_string().as_deref() {
             Some(id) if id.starts_with("cce-status") => false,
-            Some("cce-wallpaper") | Some("cce-cloud") | Some("cce-grid") => false,
+            Some("cce-wallpaper") | Some("cce-cloud") => false,
             _ => true,
         }
     }

@@ -354,7 +354,7 @@ types (`ccectl zoom-in`) stay plain lines the compositor parses itself.
   `title` / `modifiers` / `adjust` / `dismiss` / `selection` / `desktop-menu` /
   `window-menu`
   and receive push updates. `adjust` is "on"/"off" as window-adjust mode
-  (overview, or Super held) comes and goes — what `cce-grid` keys its image
+  (overview, or Super held) comes and goes — what `cce-desktop` keys its image
   resize handles on. `selection` is the other grid-facing topic: the overview
   drag-selection carrying the grid's images tells it where they went
   (`move <id>:<x>:<y> ...`, then `drop`); the grid reports the images it holds
@@ -380,7 +380,7 @@ types (`ccectl zoom-in`) stay plain lines the compositor parses itself.
   listener for every client after it. Don't copy either into an app again.
   The cce-notes protocol in particular lives in `cce_vault::notes_ipc`
   (`Command`, the `current`/`vault` queries, and `open`, the bounded off-thread
-  hand-off cce-graph, cce-grid and cce-calendar use).
+  hand-off cce-graph, cce-desktop and cce-calendar use).
 
 ## Window fades (DE-wide open/close dissolve)
 

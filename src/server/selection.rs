@@ -14,7 +14,7 @@
 //! Like the designer, a new drag replaces the selection, a press on a window
 //! outside it drops it, and there are no modifiers.
 //!
-//! The desktop IMAGES select the same way. They are `cce-grid`'s (its
+//! The desktop IMAGES select the same way. They are `cce-desktop`'s (its
 //! desktop items, pinned to the virtual canvas), and the compositor never
 //! sees them as anything but the grid surface's input region — so the grid
 //! reports them over the control socket (`grid-items <id>:<x>:<y>:<w>:<h>

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # image-selection-test — behavioral test for the overview drag-selection
-# picking up the desktop IMAGES (cce-grid's pinned items) beside windows,
+# picking up the desktop IMAGES (cce-desktop's pinned items) beside windows,
 # and a group move carrying them (src/server/selection.rs, since
 # 2026-09-30).
 #
 # Setup: a private cce-shadow instance whose seeded desktop holds two
 # images (a 100x100 red one right of where cce-terminal maps, a 60x100 blue
-# one left of it), cce-grid running against the shadow so it reports them
+# one left of it), cce-desktop running against the shadow so it reports them
 # (`grid-items` on the control socket), and one cce-terminal window. The
 # camera stays at zoom 1 in overview with one window, so everything is
 # driven in virtual units and converted through `ccectl camera`. The
@@ -30,12 +30,13 @@
 # The compositor binary is whatever cce-shadow resolves (installed first,
 # then the workspace target/release); extra args go to `cce-shadow start`,
 # so `--bin ../target/release/cce-fx` pins the tree's own build. The grid
-# is $CCE_GRID, else the workspace's target/release/cce-grid, else the one
-# on PATH — build it with `cargo build --release -p cce-grid` to test the
+# is $CCE_DESKTOP (or the older $CCE_GRID), else the workspace's
+# target/release/cce-desktop, else the one
+# on PATH — build it with `cargo build --release -p cce-desktop` to test the
 # tree's.
 #
-# The images are seeded as, and read back from, cce-grid's board: a JSON
-# Canvas file (cce-grid/src/board.rs), `Desktop.canvas` at the vault root.
+# The images are seeded as, and read back from, cce-desktop's board: a JSON
+# Canvas file (cce-desktop/src/board.rs), `Desktop.canvas` at the vault root.
 # The grid is run with CCE_VAULT pointing at a private directory in the
 # shadow's HOME, so the board's place does not depend on the vault the
 # copied config.kdl names — and a shadow grid can never write the user's
@@ -66,12 +67,12 @@ fail() {
     exit 1
 }
 
-grid=${CCE_GRID:-}
+grid=${CCE_DESKTOP:-${CCE_GRID:-}}
 if [ -z "$grid" ]; then
-    if [ -x "$repo/../target/release/cce-grid" ]; then
-        grid="$repo/../target/release/cce-grid"
+    if [ -x "$repo/../target/release/cce-desktop" ]; then
+        grid="$repo/../target/release/cce-desktop"
     else
-        grid=$(command -v cce-grid) || fail "no cce-grid: build it or set CCE_GRID"
+        grid=$(command -v cce-desktop) || fail "no cce-desktop: build it or set CCE_DESKTOP"
     fi
 fi
 command -v cce-terminal >/dev/null || fail "cce-terminal is not installed"

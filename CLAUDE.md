@@ -362,7 +362,7 @@ coordinates, which each popup finds through `XdgPopup::root_tree`; until
 Chrome's tall submenus past the top of the screen and stopped them flipping
 at the right edge.
 
-`./verify/image-selection-test` needs no client of its own: cce-grid and
+`./verify/image-selection-test` needs no client of its own: cce-desktop and
 cce-terminal are the clients, and the desktop images it seeds are what the
 overview band and a group move have to pick up (see "Overview
 drag-selection" below).
@@ -1422,10 +1422,10 @@ sat outside the edges and the ring that followed hugged them.
   scanner cannot resolve; never sync the file over it wholesale.
 - The per-side foam clipping the outside band carried is gone: it split a gap
   SHARED with a neighbouring window, and an inside ring shares nothing.
-- **Right-click opens the window context menu** — drawn by cce-grid in
+- **Right-click opens the window context menu** — drawn by cce-desktop in
   process when it subscribes to `window-menu` (see the status socket), else
   `scripts/cce-app-menu`, a `cce-cloud --json` popup like `cce-desktop-menu`
-  and cce-grid's item menu.
+  and cce-desktop's item menu.
   It opens from a right-click on a handle disc in either adjust mode, and in
   **overview from a right-click anywhere on the window**, since the client
   never sees buttons there (`should_block_button`) and the press is the
@@ -1439,7 +1439,7 @@ sat outside the edges and the ring that followed hugged them.
   from `target_page` (see cce-cloud's CLAUDE.md, the `Json` mode). Not `ccectl mode`, which appends a persistent app_id rule.
   The background menu carries the same page for the FOCUSED window: the
   background right-click names it — in the `desktop-menu` request to
-  cce-grid, or as `-i <id> -a <app_id>` to the fallback `cce-desktop-menu`
+  cce-desktop, or as `-i <id> -a <app_id>` to the fallback `cce-desktop-menu`
   script (settable modes only) — because it drops focus right after, so the
   menu could not ask for it.
 
@@ -1488,7 +1488,7 @@ two of them is a strip, so touching is enough.
   holds ids, so a carried window that closes mid-drag just stops being
   found.
 - **The desktop images select too** (since 2026-09-30). They are
-  `cce-grid`'s pinned items, which the compositor otherwise knows only as
+  `cce-desktop`'s pinned items, which the compositor otherwise knows only as
   the grid surface's input region, so the grid reports them over the
   control socket — `grid-items <id>:<x>:<y>:<w>:<h> ...`, virtual units,
   the whole list on every change, ids per grid process — and
@@ -1508,7 +1508,7 @@ two of them is a strip, so touching is enough.
   unselected image drops the selection and goes to the grid, which drags
   it as before. A background click clears images too (`has_selection`), so
   a click with only images selected drops them rather than leaving
-  overview. See `../cce-grid/CLAUDE.md` for the grid's half.
+  overview. See `../cce-desktop/CLAUDE.md` for the grid's half.
 - `ccectl selection` prints `selected=<ids|-> items=<ids|->
   band=<virtual rect|-> desk=<id@x,y,wxh;...|->` — `items` are the selected
   images, `desk` every image the grid has reported, which is how a shadow
@@ -1518,7 +1518,7 @@ two of them is a strip, so touching is enough.
   the screen edges or the edge pan scrolls the desk mid-assertion.
   `./verify/image-selection-test` drives the whole of the above — the
   report, the band, both grab sides, the click rules, the exit — against a
-  cce-grid it runs itself (`CCE_GRID`, else the workspace's release build).
+  cce-desktop it runs itself (`CCE_DESKTOP`, else the workspace's release build).
 
 ### Launching from overview
 
@@ -2090,7 +2090,7 @@ headless seat has no keyboard and Chromium crashes in
   the server thread keeps after every wake). **`window-menu`** does the same
   for a window's own menu (below), the request naming the window clicked,
   with `scripts/cce-app-menu` as its fallback: a topic per menu, so a client
-  that draws one keeps the other's fallback. cce-grid subscribes to both
+  that draws one keeps the other's fallback. cce-desktop subscribes to both
   and draws the menus in process, on a cce-ui menu layer (namespace `cce-menu`, which
   `LayerSurface::is_cloud` counts with cce-cloud's: interactive in
   overview, closed by the focus drop of a click elsewhere). With no

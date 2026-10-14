@@ -85,7 +85,7 @@ impl Window {
         if app_id_str.is_empty()
             || app_id_str.starts_with("cce-status")
             || app_id_str == "cce-wallpaper"
-            || app_id_str == "cce-grid"
+            || this.is_grid()
         {
             return;
         }
@@ -680,7 +680,7 @@ impl Window {
     /// which the user must be able to answer immediately.
     ///
     /// Hardcoded by app_id like the compositor's other DE-internal window
-    /// classes (`cce-status*`/`cce-wallpaper`/`cce-grid` in `try_restore`,
+    /// classes (`cce-status*`/`cce-wallpaper`/the grid in `try_restore`,
     /// `cce-notifier`/`cce-cloud` in `get_mode_for_window`). A third-party
     /// prompt asks for the same treatment through a `mode_rule` with
     /// `center` (`wants_view_center`): 1Password's authorization popup is a

@@ -109,7 +109,7 @@ assert_packages() {
 
 # Every systemd unit a crate ships, of any type. Units are NOT only .service:
 # cce-session.target is the session root — startcce starts and stops it, and
-# cce-grid/cce-remote are WantedBy it — and it sat unversioned for months partly
+# cce-desktop/cce-remote are WantedBy it — and it sat unversioned for months partly
 # because a .service-only glob could not see it, so versioning it would have
 # deployed nothing. One helper feeds both classifiers so their globs cannot
 # drift apart.

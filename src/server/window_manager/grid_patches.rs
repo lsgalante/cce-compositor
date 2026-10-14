@@ -1,4 +1,4 @@
-//! The world-anchored grid client's patches: which region of the desk cce-grid
+//! The world-anchored grid client's patches: which region of the desk cce-desktop
 //! must cover, sending it, and whether the current patch covers the viewport.
 //! Split out of window_manager.rs on 2026-10-10.
 

@@ -909,7 +909,7 @@ impl Output {
 
         let layout = &crate::shared::layout();
         // The relief lives on the LINES, never the cells (mirroring the
-        // cce-grid client, which must be able to latch without swapping the
+        // cce-desktop client, which must be able to latch without swapping the
         // grid's material): each cell's chamfer box is expanded by the
         // half-gap, so the lit wall occupies exactly the half-rail around
         // the cell — a crest at the rail centerline descending to the cell
@@ -1042,7 +1042,7 @@ impl Output {
                         let cell_radius = crate::window::widen_corner_radius(
                             cells.corner_radius_px, cells.cell_w_px, cells.cell_h_px,
                         );
-                        // The root plate-edge roll (mirroring cce-grid): the
+                        // The root plate-edge roll (mirroring cce-desktop): the
                         // bevel-width knob clamped to a fraction of the
                         // rail, pre-scaled by zoom like every cell metric,
                         // so the rail reads as a flat face with a narrow

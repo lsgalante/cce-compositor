@@ -670,8 +670,9 @@ pub struct Window {
     pub saved_virtual_y: f64,
     pub was_tiled: bool,
     /// Declared the desktop-grid layer via zcce_toplevel_v1.set_grid (the
-    /// app_id "cce-grid" convention also maps the role; the flag makes the
-    /// declaration explicit and app_id-independent).
+    /// app_id convention — "cce-desktop", or "cce-grid" before the rename —
+    /// also maps the role; the flag makes the declaration explicit and
+    /// app_id-independent).
     pub grid_declared: bool,
     /// Grid windows: patch sent to the client, awaiting ack_grid_patch.
     pub grid_patch_pending: Option<(u32, crate::policy::api::GridPatch)>,
