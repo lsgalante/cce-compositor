@@ -1422,8 +1422,10 @@ sat outside the edges and the ring that followed hugged them.
   scanner cannot resolve; never sync the file over it wholesale.
 - The per-side foam clipping the outside band carried is gone: it split a gap
   SHARED with a neighbouring window, and an inside ring shares nothing.
-- **Right-click opens the window context menu** — `scripts/cce-app-menu`, a
-  `cce-cloud --json` popup like `cce-desktop-menu` and cce-grid's item menu.
+- **Right-click opens the window context menu** — drawn by cce-grid in
+  process when it subscribes to `window-menu` (see the status socket), else
+  `scripts/cce-app-menu`, a `cce-cloud --json` popup like `cce-desktop-menu`
+  and cce-grid's item menu.
   It opens from a right-click on a handle disc in either adjust mode, and in
   **overview from a right-click anywhere on the window**, since the client
   never sees buttons there (`should_block_button`) and the press is the
@@ -2084,9 +2086,12 @@ headless seat has no keyboard and Chromium crashes in
   pushes one `cce_core::ipc::ctl::DesktopMenuRequest` line — the press on its
   output, in layout coordinates and on the desk, plus the focused window
   the press is about to drop (id, mode, app_id) when its mode can be set —
-  WHILE anyone subscribes (`StatusSender::has_desktop_menu`, a count the
-  server thread keeps after every wake). cce-grid subscribes and draws the
-  menu in process, on a cce-ui menu layer (namespace `cce-menu`, which
+  WHILE anyone subscribes (`StatusSender::has_menu`, a count per menu topic
+  the server thread keeps after every wake). **`window-menu`** does the same
+  for a window's own menu (below), the request naming the window clicked,
+  with `scripts/cce-app-menu` as its fallback: a topic per menu, so a client
+  that draws one keeps the other's fallback. cce-grid subscribes to both
+  and draws the menus in process, on a cce-ui menu layer (namespace `cce-menu`, which
   `LayerSurface::is_cloud` counts with cce-cloud's: interactive in
   overview, closed by the focus drop of a click elsewhere). With no
   subscriber the press spawns `scripts/cce-desktop-menu` as before, a

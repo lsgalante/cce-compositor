@@ -3,8 +3,8 @@
 // Runs in a dedicated thread. cce-status connects to
 // /tmp/cce-status-interface-{WAYLAND_DISPLAY}.sock, sends a subscription line
 // ("layout", "title", "modifiers", "adjust", "dismiss", "shortcuts",
-// "clickaway", "selection" or "desktop-menu") and receives lines whenever the
-// status changes.
+// "clickaway", "selection", "desktop-menu" or "window-menu") and receives
+// lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel. The server thread
 // owns the socket and handles all I/O independently of the Wayland event loop.
@@ -61,12 +61,31 @@ pub enum StatusMsg {
     /// group move steps, then `drop` at its release. See
     /// [`crate::selection`].
     Selection(String),
-    /// A right-click on the bare desktop, for the desktop client to open its
-    /// menu at: one `cce_core::ipc::ctl::DesktopMenuRequest` line for every
-    /// `desktop-menu` subscriber (in practice the grid). Sent only while
-    /// [`StatusSender::has_desktop_menu`]; the background right-click spawns
-    /// the `cce-desktop-menu` script otherwise.
-    DesktopMenu(String),
+    /// A right-click for the desktop client to open a menu at — the bare
+    /// desktop's (`desktop-menu`) or a window's (`window-menu`): one
+    /// `cce_core::ipc::ctl::DesktopMenuRequest` line for every subscriber to
+    /// that topic (in practice the grid). Sent only while
+    /// [`StatusSender::has_menu`]; the right-click spawns the
+    /// `cce-desktop-menu` / `cce-app-menu` script otherwise.
+    Menu(MenuTopic, String),
+}
+
+/// Which of the menus the desktop client draws (`StatusMsg::Menu`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuTopic {
+    /// `desktop-menu`: the bare desktop's.
+    Desktop,
+    /// `window-menu`: a window's.
+    Window,
+}
+
+impl MenuTopic {
+    fn subscription(self) -> Subscription {
+        match self {
+            MenuTopic::Desktop => Subscription::DesktopMenu,
+            MenuTopic::Window => Subscription::WindowMenu,
+        }
+    }
 }
 
 /// Subscription types that the status bar script can request.
@@ -89,8 +108,10 @@ enum Subscription {
     /// (see `StatusMsg::Selection`); never receives state pushes.
     Selection,
     /// `desktop-menu` — one-shot background right-clicks (see
-    /// `StatusMsg::DesktopMenu`); never receives state pushes.
+    /// `StatusMsg::Menu`); never receives state pushes.
     DesktopMenu,
+    /// `window-menu` — one-shot window right-clicks, the same way.
+    WindowMenu,
     Unknown,
 }
 
@@ -110,6 +131,7 @@ impl Subscription {
             Some(T::ClickAway) => Subscription::ClickAway,
             Some(T::Selection) => Subscription::Selection,
             Some(T::DesktopMenu) => Subscription::DesktopMenu,
+            Some(T::WindowMenu) => Subscription::WindowMenu,
             None => Subscription::Unknown,
         }
     }
@@ -190,7 +212,10 @@ pub struct StatusSender {
     /// How many `desktop-menu` subscribers the server thread holds, as of
     /// its last wake — kept by the thread, read by the main loop to decide
     /// who opens the background menu.
-    desktop_menu_subscribers: Arc<AtomicUsize>,
+    /// How many subscribers each menu topic has ([`MenuTopic`] order), as
+    /// of the server thread's last wake — kept by the thread, read by the
+    /// main loop to decide who opens a menu.
+    menu_subscribers: Arc<[AtomicUsize; 2]>,
 }
 
 impl StatusSender {
@@ -225,18 +250,17 @@ impl StatusSender {
         }
     }
 
-    /// Whether a desktop client is listening for background right-clicks.
+    /// Whether a desktop client is listening for `topic`'s right-clicks.
     /// A subscriber that died since the server thread last woke still
     /// counts, and its one click opens nothing; the thread reaps it on the
     /// hangup, so the next one falls back.
-    pub fn has_desktop_menu(&self) -> bool {
-        self.desktop_menu_subscribers.load(Ordering::Relaxed) > 0
+    pub fn has_menu(&self, topic: MenuTopic) -> bool {
+        self.menu_subscribers[topic as usize].load(Ordering::Relaxed) > 0
     }
 
-    /// Ask the desktop client to open its background menu
-    /// (`StatusMsg::DesktopMenu`).
-    pub fn send_desktop_menu(&self, line: &str) {
-        if self.tx.send(StatusMsg::DesktopMenu(line.to_string())).is_ok() {
+    /// Ask the desktop client to open `topic`'s menu (`StatusMsg::Menu`).
+    pub fn send_menu(&self, topic: MenuTopic, line: &str) {
+        if self.tx.send(StatusMsg::Menu(topic, line.to_string())).is_ok() {
             wake_fd(&self.wake);
         }
     }
@@ -292,8 +316,8 @@ pub fn spawn_status_server(display_socket: Option<String>) -> StatusSender {
     let (tx, rx) = mpsc::channel::<StatusMsg>();
     let wake = new_wake_fd().expect("failed to create status wake eventfd");
     let thread_wake = wake.clone();
-    let desktop_menu_subscribers = Arc::new(AtomicUsize::new(0));
-    let thread_count = desktop_menu_subscribers.clone();
+    let menu_subscribers = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+    let thread_count = menu_subscribers.clone();
 
     std::thread::Builder::new()
         .name("cce-status-server".into())
@@ -302,7 +326,7 @@ pub fn spawn_status_server(display_socket: Option<String>) -> StatusSender {
         })
         .expect("failed to spawn status server thread");
 
-    StatusSender { tx, wake, desktop_menu_subscribers }
+    StatusSender { tx, wake, menu_subscribers }
 }
 
 /// Block until the wake eventfd, the listener, or any subscriber socket is
@@ -336,7 +360,7 @@ fn wait_for_activity(wake: &OwnedFd, listener: &UnixListener, clients: &[Client]
 fn status_server_main(
     rx: mpsc::Receiver<StatusMsg>,
     wake: Arc<OwnedFd>,
-    desktop_menu_subscribers: Arc<AtomicUsize>,
+    menu_subscribers: Arc<[AtomicUsize; 2]>,
     display_socket: Option<String>,
 ) {
     let socket_path = get_status_socket_path(display_socket.as_deref());
@@ -470,7 +494,7 @@ fn status_server_main(
         let mut shortcut_events: Vec<String> = Vec::new();
         let mut clickaway_events: Vec<String> = Vec::new();
         let mut selection_events: Vec<String> = Vec::new();
-        let mut desktop_menu_events: Vec<String> = Vec::new();
+        let mut menu_events: Vec<(MenuTopic, String)> = Vec::new();
         loop {
             match rx.try_recv() {
                 Ok(StatusMsg::State(update)) => {
@@ -489,8 +513,8 @@ fn status_server_main(
                 Ok(StatusMsg::Selection(line)) => {
                     selection_events.push(line);
                 }
-                Ok(StatusMsg::DesktopMenu(line)) => {
-                    desktop_menu_events.push(line);
+                Ok(StatusMsg::Menu(topic, line)) => {
+                    menu_events.push((topic, line));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -527,7 +551,11 @@ fn status_server_main(
         push_one_shot(&mut clients, &Subscription::Shortcuts, &shortcut_events);
         push_one_shot(&mut clients, &Subscription::ClickAway, &clickaway_events);
         push_one_shot(&mut clients, &Subscription::Selection, &selection_events);
-        push_one_shot(&mut clients, &Subscription::DesktopMenu, &desktop_menu_events);
+        for topic in [MenuTopic::Desktop, MenuTopic::Window] {
+            let lines: Vec<String> =
+                menu_events.iter().filter(|(t, _)| *t == topic).map(|(_, l)| l.clone()).collect();
+            push_one_shot(&mut clients, &topic.subscription(), &lines);
+        }
 
         // If we got a new update, push it to all clients
         if has_new_update {
@@ -544,6 +572,7 @@ fn status_server_main(
                             | Subscription::ClickAway
                             | Subscription::Selection
                             | Subscription::DesktopMenu
+                            | Subscription::WindowMenu
                     ) {
                         continue;
                     }
@@ -572,8 +601,10 @@ fn status_server_main(
 
         // Every arrival and every reap above happens in this turn, so the
         // count the main loop reads is as fresh as the thread's own view.
-        let n = clients.iter().filter(|c| c.subscription == Subscription::DesktopMenu).count();
-        desktop_menu_subscribers.store(n, Ordering::Relaxed);
+        for topic in [MenuTopic::Desktop, MenuTopic::Window] {
+            let n = clients.iter().filter(|c| c.subscription == topic.subscription()).count();
+            menu_subscribers[topic as usize].store(n, Ordering::Relaxed);
+        }
     }
 }
 
@@ -602,6 +633,7 @@ fn format_for_subscription(sub: &Subscription, update: &StatusUpdate) -> String 
         | Subscription::ClickAway
         | Subscription::Selection
         | Subscription::DesktopMenu
+        | Subscription::WindowMenu
         | Subscription::Unknown => String::new(),
     }
 }

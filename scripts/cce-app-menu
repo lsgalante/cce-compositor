@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # cce-app-menu — Context menu for CCE application windows
 #
+# The FALLBACK: cce-grid draws this menu itself, in process, whenever it is
+# running (it subscribes to the compositor's `window-menu` status topic, and
+# the compositor only spawns this script while nobody does). Keep its rows in
+# step with cce-grid/src/desktop_menu.rs.
+#
 # Opened by the compositor (cursor.rs, the right-click border path): from a
 # right-click on a window's handle disc in adjust mode, and from a right-click
 # anywhere on a window in overview. It is a `cce-cloud --json` popup, the same

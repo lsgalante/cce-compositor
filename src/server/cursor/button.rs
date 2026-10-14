@@ -478,27 +478,9 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 // listens: in process, at the press, on the press's output.
                 // Without it, the `cce-desktop-menu` script does, through
                 // cce-cloud.
-                let listener = wm.status_sender.as_ref().filter(|s| s.has_desktop_menu());
-                if let Some(sender) = listener {
-                    let probe = ffi::wlr_box { x: cx.floor() as i32, y: cy.floor() as i32, width: 1, height: 1 };
-                    let (ox, oy) = wm
-                        .outputs
-                        .max_overlap_output(&probe)
-                        .map_or((0, 0), |o| {
-                            let b = o.wlr_output().layout_box();
-                            (b.x, b.y)
-                        });
-                    let (vx, vy) = wm.layout_to_virtual(cx, cy);
-                    let request = cce_core::ipc::ctl::DesktopMenuRequest {
-                        x: cx - ox as f64,
-                        y: cy - oy as f64,
-                        lx: cx,
-                        ly: cy,
-                        vx,
-                        vy,
-                        window: menu_window,
-                    };
-                    sender.send_desktop_menu(&request.to_string());
+                let topic = crate::status_server::MenuTopic::Desktop;
+                if let Some(sender) = wm.status_sender.as_ref().filter(|s| s.has_menu(topic)) {
+                    sender.send_menu(topic, &menu_request(wm, cx, cy, menu_window).to_string());
                 } else {
                     let home = std::env::var("HOME").unwrap_or_default();
                     let mut cmd = format!("{}/.local/bin/cce-desktop-menu -x {} -y {}", home, cx as i32, cy as i32);
@@ -671,17 +653,30 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             {
                 let cursor = cursor_mut!(wm, sid);
                 cursor.right_click_on_border = true;
-                let x = cursor.x() as i32;
-                let y = cursor.y() as i32;
+                let (cx, cy) = (cursor.x(), cursor.y());
                 let this = window_mut!(wm, id);
-                let index = this.id().ipc();
-                let app_id = this.get_app_id_string().unwrap_or_else(|| "unknown".to_string());
-                // The command runs under `sh -c`: quote the app_id, which
-                // is client-chosen text.
-                let app_id = format!("'{}'", app_id.replace('\'', "'\\''"));
-                let home = std::env::var("HOME").unwrap_or_default();
-                let cmd = format!("{}/.local/bin/cce-app-menu -x {} -y {} -i {} -a {}", home, x, y, index, app_id);
-                wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
+                let clicked = cce_core::ipc::ctl::MenuWindow {
+                    id: this.id().ipc(),
+                    mode: this.tiling_mode.as_str().to_lowercase(),
+                    app_id: this.get_app_id_string().unwrap_or_else(|| "unknown".to_string()),
+                };
+                // cce-grid draws the window's menu in process when it
+                // listens (`window-menu`); the cce-app-menu script, a
+                // cce-cloud popup, otherwise.
+                let topic = crate::status_server::MenuTopic::Window;
+                if let Some(sender) = wm.status_sender.as_ref().filter(|s| s.has_menu(topic)) {
+                    sender.send_menu(topic, &menu_request(wm, cx, cy, Some(clicked)).to_string());
+                } else {
+                    // The command runs under `sh -c`: quote the app_id, which
+                    // is client-chosen text.
+                    let app_id = format!("'{}'", clicked.app_id.replace('\'', "'\\''"));
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let cmd = format!(
+                        "{}/.local/bin/cce-app-menu -x {} -y {} -i {} -a {}",
+                        home, cx as i32, cy as i32, clicked.id, app_id
+                    );
+                    wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
+                }
 
                 let cursor = cursor_mut!(wm, sid);
                 cursor.pressed.insert(event.button);
@@ -1226,4 +1221,23 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
             log::error!("ignoring duplicate pointer button {} release", event.button);
         }
     }
+}
+
+/// The request a right-click at layout `(lx, ly)` hands the desktop client
+/// (`desktop-menu` / `window-menu`): the point on its output — where a menu
+/// on that output's surface opens — in layout coordinates and on the desk,
+/// and the window it is about.
+fn menu_request(
+    wm: &crate::window_manager::WindowManager,
+    lx: f64,
+    ly: f64,
+    window: Option<cce_core::ipc::ctl::MenuWindow>,
+) -> cce_core::ipc::ctl::DesktopMenuRequest {
+    let probe = ffi::wlr_box { x: lx.floor() as i32, y: ly.floor() as i32, width: 1, height: 1 };
+    let (ox, oy) = wm.outputs.max_overlap_output(&probe).map_or((0, 0), |o| {
+        let b = o.wlr_output().layout_box();
+        (b.x, b.y)
+    });
+    let (vx, vy) = wm.layout_to_virtual(lx, ly);
+    cce_core::ipc::ctl::DesktopMenuRequest { x: lx - ox as f64, y: ly - oy as f64, lx, ly, vx, vy, window }
 }
