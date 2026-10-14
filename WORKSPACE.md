@@ -62,14 +62,11 @@ commit is on GitHub seconds later — but a crate without the hook, or a push
 that failed, leaves the commit on no remote at all, and nothing warns.
 `git log origin/<branch>..` is the check.
 
-**git.lucas.co is a read-only mirror of GitHub**, not a publishing step.
-gitsite (`~/projects/gitsite`, run hourly by the `gitsite.timer` user unit via
-`autodeploy.sh`) `ls-remote`s every repo in its `repos.conf` — whose path
-field is now the GitHub URL — and when any HEAD moved, re-mirrors, renders and
-deploys the static site (browsable, clonable over dumb HTTP for `clone`-mode
-entries). So the chain is `git commit` → hook → GitHub → `gitsite.timer` →
-the site, with up to an hour of lag at the last step. New crates get a line in
-`repos.conf`. (The pre-2026-08-11 per-crate codeberg.org remotes are retired;
+**GitHub is the only place the repos are published.** The git.lucas.co
+mirror (a static site gitsite rebuilt hourly) was retired on 2026-10-14;
+`~/projects/gitsite` now holds only the shared hooks and `repos.conf`, the
+list `install-hooks.sh` reads. New crates still get a line in `repos.conf`,
+then `install-hooks.sh`. (The pre-2026-08-11 per-crate codeberg.org remotes are retired;
 those repos still exist server-side for old history.)
 
 The **Cargo git pins name GitHub too** (since 2026-09-21): every app declares
@@ -88,8 +85,8 @@ The per-crate **`.cargo/config.toml` that set `net.git-fetch-with-cli = true`
 is gone** (removed from all 28 crates that carried it, 2026-10-13). It was there
 only because git.lucas.co speaks dumb HTTP, which Cargo's built-in git client
 rejects ("invalid content-type"); GitHub speaks smart HTTP, and a fresh clone
-with an empty `CARGO_HOME` fetches every git dep without it. Do not restore it,
-and do not point a pin back at git.lucas.co — that would bring the failure back.
+with an empty `CARGO_HOME` fetches every git dep without it. Do not restore it;
+git.lucas.co no longer exists, so no pin can point there.
 The only crate-level `.cargo/config.toml` files left are `cce-ui`'s and
 `cce-vault-web`'s, which set wasm rustflags and are unrelated.
 
