@@ -989,7 +989,7 @@ impl WindowManager {
         // directional focus lands on the top of a stack.
         let mut drawn: Vec<((u32, u32), WindowId)> =
             self.windows.values().filter_map(|w| w.drawn_stack_key().map(|k| (k, w.id()))).collect();
-        drawn.sort_by(|a, b| b.0.cmp(&a.0));
+        drawn.sort_by_key(|d| std::cmp::Reverse(d.0));
 
         let mut windows = Vec::new();
         for w in self.windows.values() {
