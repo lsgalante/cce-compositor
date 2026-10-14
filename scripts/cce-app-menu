@@ -109,7 +109,13 @@ case "$btn" in
     "restart")
         # By id: closes every window of its process, waits for it to exit,
         # starts it again (a compositor from 2026-10-14 on).
-        $CCE_CTL restart-app "$window_index"
+        # A refusal (the app would not exit: a save prompt) is told on
+        # screen, as cce-desktop's menu does.
+        reply=$($CCE_CTL restart-app "$window_index" 2>&1)
+        if [[ "$reply" != ok* ]]; then
+            reason=${reply#error: }
+            notify-send -a cce-desktop "Couldn't restart $app_id" "${reason:-the compositor gave no answer}"
+        fi
         ;;
     "close")
         $CCE_CTL focus-window --no-wait "$window_index"
