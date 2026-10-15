@@ -293,7 +293,7 @@ dependencies = [
 [[package]]
 name = "cce-core"
 version = "0.1.0"
-source = "git+https://github.com/lsgalante/cce-core.git?rev=459192f05cd81bec4532230f29db643b8c56705b#459192f05cd81bec4532230f29db643b8c56705b"
+source = "git+https://github.com/lsgalante/cce-core.git?rev=33bc46f1cbede6cda770683932c626667805d326#33bc46f1cbede6cda770683932c626667805d326"
 dependencies = [
  "kdl",
  "libc",
@@ -308,7 +308,7 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "cc",
- "cce-core 0.1.0 (git+https://github.com/lsgalante/cce-core.git?rev=459192f05cd81bec4532230f29db643b8c56705b)",
+ "cce-core 0.1.0 (git+https://github.com/lsgalante/cce-core.git?rev=33bc46f1cbede6cda770683932c626667805d326)",
  "cce-window-manager",
  "clap",
  "env_logger",
