@@ -241,6 +241,9 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config, String> {
         idle.sleep_command = get_child_arg_string_opt(node, "sleep_command");
     }
 
+    // 3c. night light
+    let night_light = doc.nodes().iter().find(|n| n.name().value() == "night_light").map(parse_night_light);
+
     // 4. output
     let mut output = None;
     let mut display = HashMap::new();
@@ -924,5 +927,66 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config, String> {
         surface,
         window_manager,
         idle,
+        night_light,
     })
+}
+
+/// A number property of a child node, integer or float
+/// (`location latitude=40.7 longitude=-74`).
+fn child_prop_number(node: &kdl::KdlNode, child_name: &str, prop: &str) -> Option<f64> {
+    let child = node.children()?.nodes().iter().find(|c| c.name().value() == child_name)?;
+    let entry = child.entries().iter().find(|e| e.name().is_some_and(|n| n.value() == prop))?;
+    entry.value().as_f64().or_else(|| entry.value().as_i64().map(|v| v as f64))
+}
+
+/// The `night_light { }` block (`crate::night_light`):
+///
+/// ```kdl
+/// night_light {
+///     temperature 3500                          // night, kelvin (default 4000)
+///     day_temperature 6500                      // default 6500 (neutral)
+///     location latitude=40.71 longitude=-74.01  // follow the sun, or:
+///     start "21:00"; end "07:00"                // fixed hours
+///     transition 45                             // fade minutes, centred on each changeover
+///     mode "auto"                               // auto | on | off
+/// }
+/// ```
+fn parse_night_light(node: &kdl::KdlNode) -> crate::night_light::NightLightConfig {
+    use crate::night_light::{clamp_k, parse_clock, Mode, NightLightConfig, Schedule};
+    let mut cfg = NightLightConfig::default();
+    if let Some(k) = get_child_arg_i64_opt(node, "temperature") {
+        cfg.night_k = clamp_k(k);
+    }
+    if let Some(k) = get_child_arg_i64_opt(node, "day_temperature") {
+        cfg.day_k = clamp_k(k);
+    }
+    if let Some(m) = get_child_arg_f64_opt(node, "transition").or_else(|| get_child_arg_i64_opt(node, "transition").map(|v| v as f64)) {
+        cfg.transition_min = m.clamp(0.0, 720.0);
+    }
+    if let Some(m) = get_child_arg_string_opt(node, "mode") {
+        match Mode::parse(&m) {
+            Some(mode) => cfg.mode = mode,
+            None => log::warn!("night_light: unknown mode {:?} (auto, on or off); using auto", m),
+        }
+    }
+    let lat = child_prop_number(node, "location", "latitude");
+    let lon = child_prop_number(node, "location", "longitude");
+    let start = get_child_arg_string_opt(node, "start");
+    let end = get_child_arg_string_opt(node, "end");
+    cfg.schedule = match (lat, lon, start, end) {
+        (Some(lat), Some(lon), _, _) if (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon) => Schedule::Sun { lat, lon },
+        (Some(_), Some(_), _, _) => {
+            log::warn!("night_light: location out of range; no schedule");
+            Schedule::None
+        }
+        (_, _, Some(s), Some(e)) => match (parse_clock(&s), parse_clock(&e)) {
+            (Some(start), Some(end)) => Schedule::Fixed { start, end },
+            _ => {
+                log::warn!("night_light: start/end must be \"HH:MM\"; no schedule");
+                Schedule::None
+            }
+        },
+        _ => Schedule::None,
+    };
+    cfg
 }

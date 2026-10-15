@@ -792,6 +792,7 @@ unsafe extern "C" fn handle_session_active(listener: *mut ffi::wl_listener, _dat
         return;
     }
     log::info!("idle: session active (resume / VT switch), waking");
+    crate::night_light::session_active();
     idle.on_activity(&mut (*crate::reentry::wm(server)).outputs);
 }
 

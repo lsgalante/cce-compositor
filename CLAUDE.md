@@ -241,7 +241,7 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Twenty-seven modules carry unit tests — `window_manager.rs` (the most of any, among
+Twenty-eight modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
 `idle_inhibit_manager.rs` (among them `deinit` freeing every inhibitor and
@@ -270,7 +270,9 @@ by a raw destroy, dropping one takes its subtree, and `release` and `watch`
 leave the node alone, on a real `wlr_scene`),
 `shared.rs` (`IdList::move_to_back` reorders without duplicating, and the
 `sent()` lists start empty) and
-`sleep_lock.rs` (logind's sleep delay). They cluster where the logic is
+`sleep_lock.rs` (logind's sleep delay) and
+`night_light.rs` (the white point against gammastep's table, the schedule's
+fades across midnight, sun times, the fade/step state machine). They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
 `cce-window-manager` crate — run them with `cargo test -p cce-window-manager`.
@@ -2000,6 +2002,56 @@ scene draws it — stepped aside, in overview, mid-animation. Configured to
 follow the drawn spot, a Wine game read every camera move as being pushed
 off its screen and asked back for (0, 0) ~140 times a second. Unfullscreened,
 X follows the drawn spot again.
+
+### Night light (`night_light.rs`, since 2026-10-15)
+
+`night_light { }` in config.kdl warms the displays at night through each
+output's **hardware gamma LUT** (KMS `GAMMA_LUT`): free on the GPU, direct
+scanout survives, screenshots stay neutral. No block, no effect: the module
+never touches an output.
+
+```kdl
+night_light {
+    temperature 3500                          // night K (default 4000; 1700-12000)
+    day_temperature 6500                      // default 6500 = identity
+    location latitude=40.71 longitude=-74.01  // follow the sun, or
+    start "21:00"; end "07:00"                // fixed hours
+    transition 45                             // fade minutes, centred on each changeover
+    mode "auto"                               // auto | on | off
+}
+```
+
+- The LUT rides the frame: `Output::render_and_commit` calls
+  `night_light::prepare` after `build_state` (it must follow scenefx's own
+  gamma-control commit) and `committed` once the commit took. The state's
+  colour transform is test-committed on a copy (`OutputStateBuf::try_color_transform`).
+  Each output keeps a `PerOutput` (the generation it last sent); the module
+  bumps the generation on a new rounded temperature, a config load and a
+  session resume (`idle.rs`'s session-active handler), and `modeset`
+  `forget`s it, so a frame re-sends exactly when needed. While an output
+  wants a tearing flip the LUT waits: an async flip may change only the
+  framebuffer, and a LUT in it would end tearing for the episode.
+- **A wlr-gamma-control client wins** (gammastep, a game): while one holds
+  an output's control the module stands aside (status `client`), and puts
+  its LUT back in the frame where scenefx commits the identity on release.
+  Whether ours is in force is read from `wlr_output`'s PRIVATE
+  `color_transform` (`river_wlr_output_get_color_transform`).
+- No LUT (`wlr_output_get_gamma_size` 0) = `unsupported`, left alone; there
+  is no software fallback (fx_renderer has no output colour transform). So
+  **a shadow cannot see the LUT**: headless reports `unsupported`, and only
+  the schedule, the IPC and the frame bookkeeping are testable there. The
+  KMS commit is live-only.
+- Colour: Planckian locus (Kim et al.) → linear sRGB ÷ the 6500 K point,
+  applied in linear light; within 0.025 per channel of gammastep's table
+  (`white_point_matches_gammastep`). Blends are in mireds. Sun times are
+  NOAA's equations at solar noon (a few minutes out).
+- Timer: steps every 33 ms through a manual/resume/config fade (1.5 s,
+  instant with animations off), every 10 s through a scheduled transition,
+  otherwise sleeps until the next one (re-reading the clock at most every
+  10 min); never armed for a fixed `on`/`off` or without the block.
+- `ccectl night-light [status|on|off|auto|toggle|temperature <K>]`; the
+  overrides last until the next config load. The status line lists each
+  output as `applied|neutral|unsupported|client|refused|idle`.
 
 ### Tearing (wp_tearing_control_v1)
 

@@ -224,6 +224,12 @@ int32_t river_wlr_output_get_refresh(struct wlr_output *output) {
 	return output->refresh;
 }
 
+struct wlr_color_transform *river_wlr_output_get_color_transform(struct wlr_output *output) {
+	/* Private in wlroots 0.20 (set by output_apply_commit from a committed
+	 * WLR_OUTPUT_STATE_COLOR_TRANSFORM); read only, never kept. */
+	return output->WLR_PRIVATE.color_transform;
+}
+
 struct wl_global *river_wlr_output_get_global(struct wlr_output *output) {
 	return output->global;
 }

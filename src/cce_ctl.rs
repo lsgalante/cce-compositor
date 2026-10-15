@@ -62,6 +62,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  idle timeouts <display_off_s> <sleep_s>  # set the config timeouts live (0 = off); config.kdl `idle { }` on reload; a Power-plan file under /run/cce overrides either while it exists");
     print("  idle inhibit <token> <ttl_s> <who>  # hold the idle timers off for a holder with no surface (cce-desktop-portal: portal Inhibit, org.freedesktop.ScreenSaver); lapses after ttl_s (1-600) unless renewed");
     print("  idle uninhibit <token> | idle inhibit-clear  # end one lease now / drop every lease");
+    print("  night-light [status]       # mode, shown/target temperature, schedule, and each output's state (applied/neutral/unsupported/client/refused)");
+    print("  night-light on|off|auto|toggle   # night temperature now / day temperature now / follow the schedule; until the next config load");
+    print("  night-light temperature <K>      # set the night temperature live (1700-12000); config.kdl `night_light { }` on reload");
     print("  lock                       # lock the session now (cce-lock takes the prompt); replies `ok locked` once every output shows the locked scene");
     print("  status-hide-mode [true|false]");
     print("  adjust-position-mode [true|false|query]");

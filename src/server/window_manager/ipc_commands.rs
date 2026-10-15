@@ -1022,6 +1022,7 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "idle" => sys.idle.ipc(self, sys.lock, &parts[1..]),
+            "night-light" => crate::night_light::ipc(self, &parts[1..]),
             // Lock the session (`LockManager::lock_now`). The reply waits for
             // the lock to complete, which is what the lock-before-sleep
             // thread (`sleep_lock`) holds logind's sleep for: `ok locked`

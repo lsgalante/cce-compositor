@@ -242,6 +242,9 @@ pub fn parse_config(
     if let Some((sys, _)) = live.as_mut() {
         sys.idle.configure(&config.idle);
     }
+    if live.is_some() {
+        crate::night_light::configure(state, config.night_light.clone());
+    }
     next_layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     next_layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
     next_layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;

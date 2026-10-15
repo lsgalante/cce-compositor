@@ -1079,6 +1079,9 @@ pub struct Config {
     /// The `idle { }` block: display-off and sleep timeouts (seconds).
     #[serde(skip)]
     pub idle: crate::idle::IdleConfig,
+    /// The `night_light { }` block; `None` without one.
+    #[serde(skip)]
+    pub night_light: Option<crate::night_light::NightLightConfig>,
 }
 
 #[derive(Debug, Deserialize)]

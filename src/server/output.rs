@@ -237,6 +237,8 @@ pub struct Output {
     /// Darkened by the idle timeout (`IdleManager::set_displays`), so the
     /// next activity wakes this one and leaves a client-darkened output alone.
     pub idle_off: bool,
+    /// The night light's record of this output (`crate::night_light`).
+    pub night_light: crate::night_light::PerOutput,
     pub last_grid_viewport_w: i32,
     pub last_grid_viewport_h: i32,
     pub last_grid_zoom: f64,
@@ -444,6 +446,7 @@ impl Output {
             frame_phase_ns: u64::MAX,
             tearing_test_failed: false,
             idle_off: false,
+            night_light: Default::default(),
             last_grid_viewport_w: 0,
             last_grid_viewport_h: 0,
             last_grid_zoom: 0.0,
@@ -545,6 +548,17 @@ impl Output {
             }
         }
 
+        // A night-light LUT change is a reason to commit even with nothing
+        // else to draw (the timer damages the output too; this catches a
+        // gamma-control client letting go, or a modeset's re-send). Not
+        // while a tearing flip is wanted: an async flip may change nothing
+        // but the framebuffer, so a LUT in it would fail the tearing test and
+        // end tearing for the episode. The LUT catches up after it.
+        let tearing_wanted = self.rendering_current.tearing;
+        if !tearing_wanted && crate::night_light::wants_commit(&self.night_light, &self.wlr_output) && !self.scene_output.is_null() {
+            self.scene_output.damage_whole();
+        }
+
         if pending_shot.is_none() && !self.scene_output.needs_frame() {
             return Ok(false);
         }
@@ -625,6 +639,8 @@ impl Output {
         if !self.scene_output.build_state(&mut state) {
             return Err("Failed to build scene state");
         }
+        // After the scene, whose gamma-control commit it must follow.
+        let night_light = if tearing_wanted { None } else { crate::night_light::prepare(&self.night_light, &self.wlr_output, &mut state) };
 
         if self.rendering_current.tearing {
             // The test is an atomic TEST_ONLY commit; once it has said no for
@@ -649,6 +665,9 @@ impl Output {
             // at the next vblank.
             self.wlr_output.schedule_frame();
             return Err("Failed to commit state");
+        }
+        if let Some(pending) = night_light {
+            crate::night_light::committed(&self.night_light, pending);
         }
 
         // Read the just-committed frame back while the state's buffer is

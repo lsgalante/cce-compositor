@@ -135,6 +135,9 @@ bool river_wlr_output_has_mode(struct wlr_output *output, const struct wlr_outpu
 int32_t river_wlr_output_get_width(struct wlr_output *output);
 int32_t river_wlr_output_get_height(struct wlr_output *output);
 int32_t river_wlr_output_get_refresh(struct wlr_output *output);
+// The colour transform (gamma LUT) the output's last commit left in force;
+// null for the identity. Night light compares it with its own.
+struct wlr_color_transform *river_wlr_output_get_color_transform(struct wlr_output *output);
 // Physical size in mm as the backend read it from EDID (0 when unknown),
 // and a setter so a configured `size_mm` override reaches every client's
 // wl_output geometry in place of a lying EDID.

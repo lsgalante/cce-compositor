@@ -446,6 +446,18 @@ impl Wlr<ffi::wlr_output> {
         self.live().map_or(0, |o| unsafe { ffi::river_wlr_output_get_height(o) })
     }
 
+    /// Entries per channel of the output's hardware gamma LUT; 0 when it
+    /// has none (headless, or unset).
+    pub fn gamma_size(&self) -> usize {
+        self.live().map_or(0, |o| unsafe { ffi::wlr_output_get_gamma_size(o) })
+    }
+
+    /// The colour transform the output's last commit left in force; null
+    /// for the identity, or when unset. Compare it, never dereference it.
+    pub fn color_transform(&self) -> *mut ffi::wlr_color_transform {
+        self.live().map_or(std::ptr::null_mut(), |o| unsafe { ffi::river_wlr_output_get_color_transform(o) })
+    }
+
     pub fn schedule_frame(&self) {
         if let Some(o) = self.live() {
             unsafe { ffi::wlr_output_schedule_frame(o) }
@@ -927,6 +939,26 @@ impl OutputStateBuf {
     /// Ask for a tearing (async) page flip.
     pub fn set_tearing_page_flip(&mut self, tearing: bool) {
         self.0.tearing_page_flip = tearing;
+    }
+
+    /// Make `tr` (null: the identity) the output's colour transform in this
+    /// state, if a test commit with it passes; otherwise leave the state as
+    /// it was. Whether it was set. Tested on a copy, as scenefx does for a
+    /// gamma-control client's ramp, so a refusal cannot cost the frame.
+    ///
+    /// # Safety
+    /// `tr` is null or a live colour transform (the state takes its own
+    /// reference).
+    pub unsafe fn try_color_transform(&mut self, output: &Wlr<ffi::wlr_output>, tr: *mut ffi::wlr_color_transform) -> bool {
+        let mut trial = OutputStateBuf::new();
+        if !ffi::wlr_output_state_copy(&mut trial.0, &self.0) {
+            return false;
+        }
+        ffi::wlr_output_state_set_color_transform(&mut trial.0, tr);
+        if !output.test_state(&trial) {
+            return false;
+        }
+        ffi::wlr_output_state_copy(&mut self.0, &trial.0)
     }
 
     /// The buffer `build_state` attached; null before. Live until this

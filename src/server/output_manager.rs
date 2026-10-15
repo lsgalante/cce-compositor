@@ -86,6 +86,7 @@ impl OutputManager {
         }
         self.gamma_control_manager = gamma_control_manager;
         ffi::wlr_scene_set_gamma_control_manager_v1(crate::shared::scene().wlr_scene(), gamma_control_manager);
+        crate::night_light::set_gamma_manager(gamma_control_manager);
 
         let presentation = ffi::wlr_presentation_create((*server).wl_server, crate::shared::handles().backend.ptr(), 2);
         if presentation.is_null() {
@@ -140,6 +141,8 @@ impl OutputManager {
         self.power_manager_set_mode.disconnect();
         self.new_output.disconnect();
         self.wlr_output_manager.take();
+        // The gamma-control manager dies with the display.
+        crate::night_light::set_gamma_manager(std::ptr::null_mut());
 
         // Let go of the shared handle first: `Wlr::set`'s promise is that
         // the layout outlives the field's hold on it.
@@ -402,6 +405,12 @@ impl OutputManager {
         }
 
         self.first_modeset = false;
+        // A modeset may hand an output a CRTC that holds no LUT of ours.
+        for &id in ids {
+            if let Some(output) = outputs.get(id) {
+                output.night_light.forget();
+            }
+        }
         ffi::wlr_output_swapchain_manager_apply(&mut swapchain_manager);
         finish(&mut states_vec, &mut swapchain_manager);
         true

@@ -84,6 +84,8 @@ pub mod xkb_keyboard;
 pub mod xkb_config;
 #[path = "server/idle_inhibit_manager.rs"]
 pub mod idle_inhibit_manager;
+#[path = "server/night_light.rs"]
+pub mod night_light;
 #[path = "server/idle.rs"]
 pub mod idle;
 #[path = "server/tearing.rs"]
