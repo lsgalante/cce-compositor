@@ -1191,6 +1191,9 @@ impl WindowManager {
                                 // shows the compositor's clip.
                                 decorated: crate::shared::layout().is_decorated_app(&app_id),
                                 beveled: crate::shared::layout().is_beveled_app(&app_id),
+                                // So a client (the cce-claude popup) can tell
+                                // which instance of an app owns this window.
+                                pid: u32::try_from(w.unreliable_pid()).ok().filter(|&p| p > 0),
                             };
                             out.push_str(&info.to_json_line());
                             out.push('\n');
