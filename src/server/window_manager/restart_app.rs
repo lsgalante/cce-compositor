@@ -15,8 +15,13 @@ impl WindowManager {
         if force {
             args = &args[1..];
         }
+        // The effective focused window, not the seat's: with no name this is
+        // what the launcher's System page ("Restart Focused App") runs, and
+        // while that popup is open it holds the seat focus itself — the seat's
+        // window would restart cce-cloud, not the app behind it.
+        // `focused_window` skips overlay UI exactly as `close` does.
         let target = if args.is_empty() {
-            self.seat_focused_window_id()
+            self.focused_window()
         } else {
             self.find_window_id(&args.join(" "))
         };

@@ -2143,7 +2143,10 @@ headless seat has no keyboard and Chromium crashes in
   byte-a-second client hold the thread that serves every other subscriber.
 - **`restart-app [--force] [app_id|id]`** (since 2026-10-14; `app_restart.rs`
   for the process side, `window_manager/restart_app.rs` for the windows)
-  restarts the app behind a window (focused if omitted). It snapshots
+  restarts the app behind a window (focused if omitted — `focused_window`,
+  which skips overlay UI, so cce-cloud's System page "Restart Focused App"
+  reaches the window behind the launcher rather than the launcher; it read
+  the seat's focus until 2026-10-16). It snapshots
   `/proc/<pid>` first (argv, environ, cwd, exe minus " (deleted)"), closes
   *every* window of that pid (not a signal: cce-ui has no SIGTERM handler,
   so a kill skips `on_exit` autosave), waits on a pidfd, then execs the twin
