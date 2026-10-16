@@ -2092,6 +2092,25 @@ for a tiled window among the tiled ones — `ccectl windows`
 prints `stack=N` (render-list position, higher is nearer) so that order can
 be asserted from a shadow without a screenshot.
 
+**The "needs attention" notification is for an activation NOT honoured**
+(since 2026-10-15): a window still unmapped or shy, or one asking while an
+exclusive layer surface (the launcher, a menu) holds the keyboard — which
+the handler now leaves alone instead of focusing the window under it. An
+honoured activation posts nothing, and a window gets one notification per
+`ATTENTION_REPEAT` (10 s) however often it asks (`attention_due`). Until
+then every honoured activation posted one too, and focusing a window under
+the open launcher lasted only until the next manage pass handed the
+keyboard back: the Claude app, which asks again on losing focus, looped 30
+times in one second and posted 30 "Claude needs attention" notifications.
+The notification goes out through `gdbus` on the SHARED session bus, so a
+shadow test that reaches it pops it on the live screen; put a stub `gdbus`
+first on the shadow's `PATH` (`PATH=<dir>:$PATH cce-shadow start …`, the
+compositor inherits it) to record the calls instead. Reproduce with
+`verify/clients` `layer-bar --keyboard exclusive --layer overlay` up while
+`float-pair --no-activate --reactivate 4` asks: the log reads `not
+honoured: an exclusive layer surface holds the keyboard` and the stub sees
+one call.
+
 Two hazards in `try_restore` bite a second toplevel of a running app, which
 the app_id-only third pass of `match_last_window_state` hands the main
 window's remembered entry (a transient is excluded, a parentless dialog is

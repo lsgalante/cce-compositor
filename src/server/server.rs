@@ -44,6 +44,36 @@ fn in_startup_activation_grace() -> bool {
         .is_some_and(|deadline| std::time::Instant::now() < *deadline)
 }
 
+/// How long one window's activation-attention notification stands for its
+/// later requests: a client that keeps asking gets one notification, not one
+/// per request.
+const ATTENTION_REPEAT: std::time::Duration = std::time::Duration::from_secs(10);
+
+thread_local! {
+    /// When each window last had an attention notification posted.
+    static ATTENTION_POSTED: std::cell::RefCell<std::collections::HashMap<crate::window::WindowId, std::time::Instant>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Whether window `id` may have an attention notification now; if so, it is
+/// recorded as posted. Entries older than `ATTENTION_REPEAT` are dropped on
+/// the way, so a closed window's entry does not outlive the interval.
+fn attention_due(id: crate::window::WindowId) -> bool {
+    attention_due_at(id, std::time::Instant::now())
+}
+
+fn attention_due_at(id: crate::window::WindowId, now: std::time::Instant) -> bool {
+    ATTENTION_POSTED.with(|posted| {
+        let mut posted = posted.borrow_mut();
+        posted.retain(|_, at| now.duration_since(*at) < ATTENTION_REPEAT);
+        if posted.contains_key(&id) {
+            return false;
+        }
+        posted.insert(id, now);
+        true
+    })
+}
+
 // Helper macro equivalent to @fieldParentPtr in Zig
 #[macro_export]
 macro_rules! container_of {
@@ -425,8 +455,20 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
     // covered it. A window that has not mapped yet (the request
     // often lands between app_id and map) is left to the map path,
     // which focuses new windows under its own settle rules.
-    if matches!(win.state, crate::window::WindowState::Mapped) && !win.is_shy() {
-        if let Some(sid) = wm.first_seat() {
+    //
+    // An exclusive layer surface (the launcher, a menu) holding the
+    // keyboard is left alone: the next manage pass would hand the keyboard
+    // straight back to it, and a client that asks again on losing focus
+    // (Electron does) then loops. On 2026-10-15 the Claude app did,
+    // 30 times in one second with cce-cloud open, and every round posted a
+    // notification. The window is announced instead, below.
+    let mapped = matches!(win.state, crate::window::WindowState::Mapped) && !win.is_shy();
+    let seat = wm.first_seat();
+    let held_by_layer = seat.and_then(|sid| wm.seats.get(sid)).is_some_and(|seat| {
+        matches!(seat.layer_shell.scheduled_focus, crate::layer_shell::LayerShellSeatFocus::Exclusive(_))
+    });
+    match seat {
+        Some(sid) if mapped && !held_by_layer => {
             if let Some(win) = wm.windows.get_mut(id) {
                 win.minimized = false;
             }
@@ -434,9 +476,22 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
             wm.raise_window(id);
             crate::shared::pending().dirty_windowing();
             log::info!("xdg activation focused and raised '{}' ({})", title, app_id);
+            // Honoured: the window is in front, so there is nothing to
+            // announce. Until 2026-10-15 this posted "needs attention"
+            // anyway, for a window the user was by then looking at.
+            return;
         }
-    } else {
-        log::info!("xdg activation for unmapped window '{}' ({}): left to the map path", title, app_id);
+        _ if held_by_layer => {
+            log::info!("xdg activation for '{}' ({}) not honoured: an exclusive layer surface holds the keyboard", title, app_id);
+        }
+        _ => {
+            log::info!("xdg activation for unmapped window '{}' ({}): left to the map path", title, app_id);
+        }
+    }
+
+    if !attention_due(id) {
+        log::info!("attention notification for '{}' ({}) held back: one was posted in the last {} s", title, app_id, ATTENTION_REPEAT.as_secs());
+        return;
     }
 
     let uid = unsafe { libc::getuid() };
@@ -1060,5 +1115,28 @@ impl Server {
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.cce_window_management), crate::cce_window_management::CceWindowManagement::new());
             server.assume_init()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn win(index: u32) -> crate::window::WindowId {
+        crate::window::WindowId(crate::slotmap::Key { generation: 0, index })
+    }
+
+    #[test]
+    fn attention_posts_once_per_window_per_interval() {
+        let t0 = std::time::Instant::now();
+        assert!(attention_due_at(win(1), t0));
+        // The 2026-10-15 burst: the same window asking again at once.
+        for _ in 0..30 {
+            assert!(!attention_due_at(win(1), t0));
+        }
+        // Another window is not held back by the first.
+        assert!(attention_due_at(win(2), t0));
+        assert!(!attention_due_at(win(1), t0 + ATTENTION_REPEAT - std::time::Duration::from_millis(1)));
+        assert!(attention_due_at(win(1), t0 + ATTENTION_REPEAT));
     }
 }
