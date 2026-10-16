@@ -919,10 +919,13 @@ impl WindowManager {
                 // focused window if omitted) is centered in the output, then focus
                 // and raise it. Replies with the window's resulting on-screen box so
                 // the caller can screenshot it directly (grim -g "X,Y WxH").
+                // Unnamed, the effective focused window, which skips overlay
+                // UI: the launcher's System page runs this with its popup
+                // holding the seat focus (see `restart_app_command`).
                 let target = if parts.len() >= 2 {
                     self.find_window_id(&parts[1..].join(" "))
                 } else {
-                    self.seat_focused_window_id()
+                    self.focused_window()
                 };
                 let Some(target_id) = target.filter(|&id| self.windows.contains(id)) else {
                     return "error: window not found\n".to_string();
