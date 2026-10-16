@@ -127,6 +127,11 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
     // event itself.
     let is_overview = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
         && !over_chrome;
+    // Super pans on any scroll too, and chrome is excepted for the same
+    // reason: a window's menu opens from its handle disc in adjust mode,
+    // with Super still down, and a two-finger swipe over it is the menu's
+    // page turn, not a pan of the desk beneath.
+    let is_super_pan = (modifiers & 0x40) != 0 && !over_chrome;
 
     let is_finger = event.source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER
         || event.source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_CONTINUOUS;
@@ -143,7 +148,7 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
         }
     }
 
-    if (modifiers & 0x40) != 0 || is_on_background || is_overview || was_panning {
+    if is_super_pan || is_on_background || is_overview || was_panning {
         let step = delta / wm.desk_zoom;
         let vertical =
             event.orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
