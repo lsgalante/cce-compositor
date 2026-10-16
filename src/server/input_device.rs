@@ -172,7 +172,9 @@ impl InputDevice {
             };
             if !handle.is_null() {
                 let libinput_dev = crate::libinput_device::LibinputDevice::init(server, device, handle);
-                libinput_dev.apply_config(&crate::shared::layout().input_config);
+                let layout = crate::shared::layout();
+                libinput_dev.apply_config(&layout.input_config);
+                libinput_dev.apply_touchscreen(layout.touchscreen);
                 (*device).libinput = Some(libinput_dev);
             }
 

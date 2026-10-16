@@ -2367,6 +2367,18 @@ so `weston-simple-touch` under `WAYLAND_DEBUG=1` shows the `Client` route's
 `wl_touch` traffic — and the `cancel` a third finger sends it. A shadow's
 input.kdl is its own copy: add `edge_*`/`pinch3_*` binds there to try them.
 
+**Touchscreens can be switched off** (since 2026-10-16):
+`window_manager { touchscreen (bool)false }` in config.kdl, or live with
+`ccectl touchscreen on|off|toggle` until the next config load (the reply is
+`touchscreen=on|off devices=N`; the settings app's Display page sends it and
+writes the key). Off is libinput's send-events mode on every
+`WLR_INPUT_DEVICE_TOUCH` device (`LibinputDevice::apply_touchscreen`), so it
+stops at the device: no client, gesture or idle wake sees a finger, and a
+touchscreen plugged in later starts off. It lives under `window_manager`, not
+`input`, for `swipe_peek`'s reason. `ccectl touch` injection bypasses
+libinput and is unaffected, so a shadow cannot show the switch working; only
+the device count in the reply.
+
 **The on-screen keyboard follows a touched field** (`osk.rs`, since
 2026-10-05). A finger on an app's window (`note_touch` at a `Client` down
 or lift, or a `Pointer` tap's lift; never a layer surface, so taps on the

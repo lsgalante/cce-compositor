@@ -186,6 +186,37 @@ impl LibinputDevice {
         }
     }
 
+    /// Turn a touchscreen's events on or off (`window_manager {
+    /// touchscreen }`). Off is libinput's send-events mode, so the device
+    /// stops at the source: libinput releases any finger it holds down, and
+    /// nothing after reaches a client, the compositor's touch gestures or
+    /// the idle timer. Any other device is left alone. Returns whether this
+    /// is a touchscreen, for `ccectl touchscreen`'s count.
+    ///
+    /// # Safety
+    /// As [`apply_config`](Self::apply_config).
+    pub unsafe fn apply_touchscreen(&self, enabled: bool) -> bool {
+        let handle = self.libinput;
+        if handle.is_null()
+            || ffi::river_wlr_input_device_get_type((*self.parent_device).wlr_device())
+                != ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH
+        {
+            return false;
+        }
+        let mode = if enabled {
+            ffi::libinput_config_send_events_mode_LIBINPUT_CONFIG_SEND_EVENTS_ENABLED
+        } else {
+            ffi::libinput_config_send_events_mode_LIBINPUT_CONFIG_SEND_EVENTS_DISABLED
+        };
+        let supported = ffi::libinput_device_config_send_events_get_modes(handle);
+        if mode != ffi::libinput_config_send_events_mode_LIBINPUT_CONFIG_SEND_EVENTS_ENABLED && (supported & mode) == 0 {
+            log::warn!("input: a touchscreen cannot be disabled (send-events modes {:#x})", supported);
+        } else if ffi::libinput_device_config_send_events_get_mode(handle) != mode {
+            ffi::libinput_device_config_send_events_set_mode(handle, mode);
+        }
+        true
+    }
+
     /// # Safety
     /// No reference into the server's `libinput_config` may be live: the
     /// device unregisters itself there through `shared::server_ptr`.

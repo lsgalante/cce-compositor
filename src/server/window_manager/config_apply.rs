@@ -34,7 +34,25 @@ impl WindowManager {
                 libinput.apply_config(&crate::shared::layout().input_config);
             }
         }
+        self.apply_touchscreen(input);
         self.apply_key_repeat(input);
+    }
+
+    /// Push `touchscreen` to every touchscreen and return how many there are.
+    ///
+    /// # Safety
+    /// As [`apply_input_config`](Self::apply_input_config).
+    pub unsafe fn apply_touchscreen(&mut self, input: &mut crate::input_manager::InputManager) -> usize {
+        let enabled = crate::shared::layout().touchscreen;
+        let mut count = 0;
+        for device in input.devices() {
+            if let Some(ref libinput) = (*device).libinput {
+                if libinput.apply_touchscreen(enabled) {
+                    count += 1;
+                }
+            }
+        }
+        count
     }
 
     /// Push `input_config`'s repeat rate/delay to every hardware keyboard and

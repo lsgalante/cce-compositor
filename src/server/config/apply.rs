@@ -97,6 +97,7 @@ pub fn parse_config(
         next_layout.touchpad_view_invert = tv.and_then(|w| w.touchpad_view_invert).unwrap_or(false);
         next_layout.touchpad_hscroll_shift_apps = tv.and_then(|w| w.touchpad_hscroll_shift_apps.clone()).unwrap_or_default();
         next_layout.osk_on_touch = tv.and_then(|w| w.osk_on_touch).unwrap_or(true);
+        next_layout.touchscreen = tv.and_then(|w| w.touchscreen).unwrap_or(true);
     }
     state.display = config.display.clone();
     state.on_app_exit = config

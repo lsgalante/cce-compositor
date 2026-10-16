@@ -209,6 +209,9 @@ pub struct Layout {
     pub touchpad_view_invert: bool,
     /// `window_manager { osk_on_touch }` (`osk.rs`).
     pub osk_on_touch: bool,
+    /// `window_manager { touchscreen }`: false turns every touchscreen's
+    /// events off at libinput (`LibinputDevice::apply_config`).
+    pub touchscreen: bool,
     /// `window_manager { swipe_peek }`: the desktop's lean toward a
     /// directional swipe bind at its threshold, screen px (default 60;
     /// 0 disables). See `cursor::swipe_peek_for`.
@@ -396,6 +399,7 @@ impl Default for Layout {
             touchpad_view_sensitivity: 1.0,
             touchpad_view_invert: false,
             osk_on_touch: true,
+            touchscreen: true,
             swipe_peek_px: 60.0,
             swipe_repeat_peek_px: 30.0,
             swipe_near_peek_px: 15.0,
@@ -631,6 +635,13 @@ pub struct WindowManagerConfig {
     /// hide it when the field lets go (`osk.rs`). Default on. KDL:
     /// `osk_on_touch (bool)false`.
     pub osk_on_touch: Option<bool>,
+    /// Touchscreens deliver input (default on). Off sets each one's
+    /// libinput send-events mode to disabled, so a finger reaches nothing:
+    /// no client, no compositor gesture, no idle wake. Here rather than
+    /// under `input` for the same reason as `swipe_peek`; `ccectl
+    /// touchscreen on|off` changes it live until the next config load.
+    /// KDL: `touchscreen (bool)false`.
+    pub touchscreen: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -1767,6 +1778,14 @@ style {
         assert_eq!(off.window_manager.unwrap().osk_on_touch, Some(false));
         let unset = parse_kdl_config("window_manager {\n}").unwrap();
         assert_eq!(unset.window_manager.unwrap().osk_on_touch, None);
+    }
+
+    #[test]
+    fn test_kdl_touchscreen() {
+        let off = parse_kdl_config("window_manager {\n touchscreen (bool)false\n}").unwrap();
+        assert_eq!(off.window_manager.unwrap().touchscreen, Some(false));
+        let unset = parse_kdl_config("window_manager {\n}").unwrap();
+        assert_eq!(unset.window_manager.unwrap().touchscreen, None);
     }
 
     #[test]

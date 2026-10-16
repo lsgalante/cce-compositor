@@ -1057,6 +1057,21 @@ impl WindowManager {
                 let (rate, delay) = crate::shared::layout().input_config.repeat_info();
                 format!("rate={} delay={} keyboards={}\n", rate, delay, keyboards)
             }
+            // Touchscreens on or off, live, like `repeat`: it lasts until the
+            // next config load, which puts `window_manager { touchscreen }`
+            // back. The settings app's Display page writes that key too.
+            "touchscreen" => {
+                match parts.get(1..) {
+                    Some([]) => {}
+                    Some(["on"]) => crate::shared::update_layout(|l| l.touchscreen = true),
+                    Some(["off"]) => crate::shared::update_layout(|l| l.touchscreen = false),
+                    Some(["toggle"]) => crate::shared::update_layout(|l| l.touchscreen = !l.touchscreen),
+                    _ => return "error: usage: touchscreen [on|off|toggle]\n".to_string(),
+                }
+                let devices = unsafe { self.apply_touchscreen(input) };
+                let state = if crate::shared::layout().touchscreen { "on" } else { "off" };
+                format!("touchscreen={} devices={}\n", state, devices)
+            }
             "outputs" => {
                 // One line per output: the figures a client's `units::Metric`
                 // is built from (mode, scale, logical size, physical mm) and
