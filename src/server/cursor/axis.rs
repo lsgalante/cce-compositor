@@ -95,9 +95,11 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
         let ly = cursor.y();
         let mut over_interactive = false;
         // Chrome under the pointer — a Popup (the cce-cloud launcher) or an
-        // Overlay dock, or a cce-cloud layer surface (context menu). Live UI
-        // during overview, same as in the button and motion paths: a wheel
-        // over the launcher's list scrolls the list, not the desktop.
+        // Overlay dock, a status segment with its in-surface menu open, or
+        // a cce-cloud layer surface (context menu). Live UI during
+        // overview, same as in the button and motion paths: a wheel over
+        // the launcher's list scrolls the list, and a side swipe over a bar
+        // menu turns its page, not the desktop.
         let mut over_chrome = false;
         if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             match result.data {
@@ -107,7 +109,7 @@ pub(crate) fn on_axis(wm: &mut crate::window_manager::WindowManager, sid: crate:
                         matches!(
                             w.tiling_mode,
                             crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
-                        )
+                        ) || wm.is_expanded_status_segment(w)
                     });
                 }
                 SceneNodeDataVal::LayerSurface(layer_surface) => {
