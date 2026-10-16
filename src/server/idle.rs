@@ -209,6 +209,16 @@ pub fn merge_inhibitors(wayland: &[String], external: &[ExternalLease]) -> Vec<S
     names
 }
 
+/// The status line's `inhibited_by`: the names comma-joined, with a comma
+/// or backslash INSIDE a name escaped by a backslash, so a reader splits on
+/// unescaped commas only. Window titles are free text — `window:Hello,
+/// world` used to read as two holders. A name without either character
+/// prints as it always did, so a reader that splits on every comma still
+/// reads every other name right.
+pub fn join_inhibitors(names: &[String]) -> String {
+    names.iter().map(|n| n.replace('\\', "\\\\").replace(',', "\\,")).collect::<Vec<_>>().join(",")
+}
+
 fn now_ms() -> u64 {
     let ts = crate::util::timestamp();
     ts.tv_sec as u64 * 1000 + ts.tv_nsec as u64 / 1_000_000
@@ -465,9 +475,9 @@ impl IdleManager {
         }
     }
 
-    /// The inhibitor names as the status line prints them.
+    /// The inhibitor names as the status line prints them ([`join_inhibitors`]).
     fn inhibited_by(&self) -> String {
-        self.inhibitors.as_deref().unwrap_or(&[]).join(",")
+        join_inhibitors(self.inhibitors.as_deref().unwrap_or(&[]))
     }
 
     /// Arm (or disarm, when inhibited or unconfigured) both timers from
@@ -854,6 +864,14 @@ mod tests {
         );
         assert_eq!(names, ["mpv", "portal:steam", "portal:firefox"]);
         assert!(merge_inhibitors(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_comma_inside_a_name_is_escaped_not_split() {
+        let names = ["mpv".to_string(), "window:Hello, world".to_string(), r"window:C:\temp".to_string()];
+        assert_eq!(join_inhibitors(&names), r"mpv,window:Hello\, world,window:C:\\temp");
+        assert_eq!(join_inhibitors(&["mpv".into(), "portal:steam".into()]), "mpv,portal:steam", "plain names are unchanged");
+        assert_eq!(join_inhibitors(&[]), "");
     }
 
     #[test]
