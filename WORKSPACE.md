@@ -328,6 +328,23 @@ Config is **KDL** (`kdl` crate), loaded from `~/.config/cce/` (honoring
   by the compositor from the global block for its own desktop pans. Keybinding
   and input edits are made directly on the file (e.g. via cce-data-editor) —
   there is deliberately no dedicated settings UI.
+  **Every chord an app resolves is published** (since 2026-10-17):
+  `input::app_chord` / `widget_chord` write what they answered, compiled-in
+  defaults included, to `$XDG_RUNTIME_DIR/cce/keys/<pid>`
+  (`cce_core::input::published`). That is how **`cce-keys`** (the Super+/
+  key-help overlay, a bin in `cce-system-interface`) lists the focused
+  window's shortcuts beside the window manager's, so an app shortcut resolved
+  any other way is missing from it. **Resolve a new shortcut with
+  `input::app_shortcut(name, default, label)`**, whose label ("New tab") is
+  what the overlay shows; plain `app_chord` is listed under its name made
+  readable, and the toolkit's own names are labelled in cce-core
+  (`toolkit_label`). Resolve every shortcut up front, not inside the key
+  handler's `if` chain, or only those a key press has reached get listed. In
+  input.kdl any entry may carry `label="..."`, which wins over both — that is
+  how a `spawn` bind gets a name instead of its command line. The overlay
+  shows rows with the same label as one row with several key caps. Like any
+  cce-core change, an app publishes only once it is rebuilt; until then the
+  overlay falls back to its input.kdl domain.
 - Config edits are backed up under `~/.config/cce/backups/config.kdl.<n>.bak`.
 
 The compositor additionally runs `~/.config/cce/init` on startup and persists window
