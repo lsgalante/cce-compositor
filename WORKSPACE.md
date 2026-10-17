@@ -445,13 +445,24 @@ reaches running clients and the compositor without a reload. Set
 What follows the switch: in cce-ui, the dropdown open/close, the toggle
 slide, the scrollbar raise/sink fade, the wheel glide and kinetic coast
 (`scroll_settings()` reports both off), slider and ramp wheel inertia, the
-hover highlight, and the Spinner's turn (it holds a still pose). In the
-compositor, the open/close fades (window, overlay layer, and the `fade-out`
-reply, which answers 0), the camera eases (`advance_camera_animation`:
-overview ramp, focus pans, kinetic pan), the border-reveal/adjust-dim fades,
-and the fullscreen-toggle resize. **A new
-animation should ask `enabled()` too.** Like the close fade, the cce-ui half
+hover highlight, and the activity indicators — the Spinner and the
+indeterminate ProgressBar — which hold a still pose. In the compositor, the
+open/close fades (window, overlay layer, and the `fade-out` reply, which
+answers 0), the camera eases (`advance_camera_animation`: overview ramp, focus
+pans, kinetic pan), the border-reveal/adjust-dim fades, and the
+fullscreen-toggle resize. **A new animation should ask `enabled()` too.**
+Like the close fade, the cce-ui half
 reaches a client only once that client has been rebuilt against the toolkit.
+
+Beside the switch, the **animation speed** (`cce_ui::motion::speed()`): a
+multiplier on the rhythm of what animates for as long as it runs — today the
+activity indicators, which step by `dt * speed()`. It is a preference, not a
+power lever, so it lives in the shared config as `style { animation_speed }`,
+set from the System Interface's Appearance page (Slower 0.5 to Faster 2;
+clamped to 0.25–4), and is re-read at most every 500 ms like the switch, so
+running clients follow a pick without a restart. Transitions (a dropdown
+opening, a toggle sliding) keep their own timing. **A new looping animation
+should scale by `speed()`.**
 
 ## Idle timeouts per power mode
 
