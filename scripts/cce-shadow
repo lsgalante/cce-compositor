@@ -24,6 +24,17 @@
 #                    config that exists but omits the key defaults it ON, and
 #                    the seeded config is a copy of the user's, which omits it.
 #                    So seed_config writes the key explicitly. Do not drop it.
+#   idle             The seeded config carries the user's `idle { sleep … }`,
+#                    whose default command is `systemctl suspend` — and that
+#                    suspends the REAL machine. A headless shadow has no input,
+#                    so it always reaches the timeout: an orphaned one did, on
+#                    2026-10-17, 30 minutes after its agent stopped driving it.
+#                    So every start replaces the block with one that never
+#                    sleeps (seed_config) and points CCE_IDLE_PLAN_DIR at an
+#                    empty dir, since the power plan's /run/cce/idle_sleep
+#                    would otherwise override the config's 0. The compositor
+#                    also refuses a sleep command without a login session
+#                    (idle.rs, sleep_now). Do not drop either.
 #
 # Deliberately NOT isolated: XDG_RUNTIME_DIR (the wayland socket must live in a
 # real user-owned dir, and the display name already differs) and the D-Bus
@@ -470,6 +481,18 @@ seed_config() {
             >> "$cfg/config.kdl"
     fi
 
+    # See the header: the user's idle block would suspend the real machine.
+    # The parser takes the FIRST `idle` node, so the user's is removed rather
+    # than overridden, on every start (a tree seeded before this rule has it).
+    awk '
+        skip { depth += gsub(/\{/, "{") - gsub(/\}/, "}"); if (depth <= 0) skip = 0; next }
+        /^idle([ \t{]|$)/ { depth = gsub(/\{/, "{") - gsub(/\}/, "}"); skip = (depth > 0); next }
+        /^\/\/ cce-shadow: never sleep/ { next }
+        { print }' "$cfg/config.kdl" > "$cfg/config.kdl.tmp"
+    mv "$cfg/config.kdl.tmp" "$cfg/config.kdl"
+    printf '// cce-shadow: never sleep the real machine (see the cce-shadow header).\nidle {\n    display_off (i64)0\n    sleep (i64)0\n    sleep_command "true"\n}\n' \
+        >> "$cfg/config.kdl"
+
     # KDL is typed and the parser reads this with as_f64(), which returns None
     # for an integer literal — "(f64)2" silently leaves the output at scale 1,
     # while "(f64)2.0" applies. Normalise before writing.
@@ -564,7 +587,12 @@ cmd_start() {
             "XDG_CACHE_HOME=$SHADOW_HOME/.cache" \
             "XDG_DATA_HOME=$SHADOW_HOME/.local/share" \
             "WLR_BACKENDS=headless" \
-            "WLR_HEADLESS_OUTPUTS=1")
+            "WLR_HEADLESS_OUTPUTS=1" \
+            "CCE_IDLE_PLAN_DIR=$RUN_DIR/idle-plan")
+    # Empty on purpose: the live power plan's sleep timeout must not reach a
+    # shadow (see the header, idle). Present, so the compositor watches it
+    # rather than polling for it.
+    mkdir -p "$RUN_DIR/idle-plan"
     [ -n "$gpu" ] && env_args+=("WLR_RENDER_DRM_DEVICE=$gpu")
 
     # Written before the launch, so an instance is attributable even if the

@@ -529,6 +529,15 @@ impl IdleManager {
     /// handler reaps it.
     pub fn sleep_now(&mut self) {
         let cmd = self.sleep_command().to_string();
+        // Only a compositor on a real seat may sleep the machine. A headless
+        // or nested one (a cce-shadow) has no login session, but its seeded
+        // config still names `systemctl suspend`, which suspends the REAL
+        // machine: an orphaned shadow, idle because nothing drives it, did
+        // exactly that on 2026-10-17.
+        if crate::shared::handles().session.is_null() {
+            log::info!("idle: no login session (headless or nested); not running the sleep command `{}`", cmd);
+            return;
+        }
         log::info!("idle: sleeping via `{}`", cmd);
         self.sleeping = true;
         if let Err(e) = crate::process::spawn_sh(&cmd, &[]) {

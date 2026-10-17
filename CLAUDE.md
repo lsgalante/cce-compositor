@@ -167,7 +167,7 @@ base) is migrated into `default` on first use — but *not* while it is still
 running, since its pidfile is at the old path and moving it would strand a live
 compositor no command could reach again.
 
-Four things in the tree are load-bearing, and each was a bug before it was a
+Five things in the tree are load-bearing, and each was a bug before it was a
 feature:
 
 - **`HOME` is isolated** because screenshots go to a hardcoded
@@ -188,6 +188,17 @@ feature:
   seeded config is a copy of the user's, which omits it. Without it every
   capture fires a `notify-send` toast onto the user's real screen, because the
   D-Bus session bus is necessarily shared.
+- **The `idle` block is replaced on every start** with one that never sleeps
+  (`display_off 0`, `sleep 0`, `sleep_command "true"`; the parser takes the
+  FIRST `idle` node, so the user's is cut out, not overridden), and
+  `CCE_IDLE_PLAN_DIR` points at an empty `run/idle-plan`, so the live power
+  plan's `idle_sleep` cannot re-arm it. The seeded block is the user's, whose
+  command is `systemctl suspend` — the REAL machine — and a headless shadow
+  has no input, so it always times out: on 2026-10-17 an orphaned `agent-3`
+  suspended the laptop 30 minutes after its agent stopped driving it. Behind
+  that, the compositor refuses any sleep command without a login session
+  (`IdleManager::sleep_now`, `idle: no login session …`), so even a shadow
+  started by an older script cannot do it once this binary runs it.
 
 The GPU pin (`--gpu`, default: first non-NVIDIA render node) is not cosmetic:
 full-output capture works anywhere, but `screenshot window` reads the client's
@@ -1735,9 +1746,9 @@ power key, `systemctl suspend` — are `sleep_lock.rs`: a thread holding a
 `delay` sleep inhibitor that answers `PrepareForSleep(true)` with `ccectl
 lock` (whose reply waits for `send_locked`) and then lets logind go. Real seats
 only; a shadow has no session and starts no thread, so test `ccectl lock` and
-`idle sleep` there (give the shadow a harmless `idle { sleep_command }` first —
-its seeded config's default is `systemctl suspend`, the REAL machine) and the
-logind half with `cargo test --lib sleep_lock -- --ignored`. While locked,
+`idle sleep` there (the lock happens, and the sleep logs `idle: no login
+session …` instead of running its command — see the shadow's `idle` rule)
+and the logind half with `cargo test --lib sleep_lock -- --ignored`. While locked,
 `handle_group_key` runs no binding but VT switches and config keybinds on
 volume/brightness/media keys (`allowed_while_locked`), and no input-method
 grab; every other key goes to the lock surface.
