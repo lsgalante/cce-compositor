@@ -309,26 +309,21 @@ impl WindowManager {
 
             let is_focused = Some(w.id()) == focused_win;
 
+            let (virtual_x, virtual_y, fullscreen_at) = saved_spot(w);
             let win_state = SavedWindowState {
                 app_id: app_id.clone(),
                 title: title.clone(),
                 tiling_mode: w.tiling_mode,
                 minimized: w.minimized,
-                // Fullscreen, virtual_x/y is the desk spot the window
-                // covers (`place_fullscreen_windows`), not where it lives.
-                virtual_x: if w.was_fullscreen { w.saved_virtual_x } else { w.virtual_x },
-                virtual_y: if w.was_fullscreen { w.saved_virtual_y } else { w.virtual_y },
+                virtual_x,
+                virtual_y,
                 scale: w.scale,
                 width: w.box_geom.width as u32,
                 height: w.box_geom.height as u32,
                 cmdline,
                 focused: is_focused,
                 argv: (!args.is_empty()).then(|| args.clone()),
-                fullscreen_at: if w.was_fullscreen {
-                    Some((w.virtual_x, w.virtual_y))
-                } else {
-                    w.last_fullscreen_at.or(w.restore_fullscreen_at)
-                },
+                fullscreen_at,
                 stack: stack_order.iter().position(|&s| s == w.id()).map(|p| p as u32),
             };
 
@@ -349,8 +344,23 @@ impl WindowManager {
             // A stack position is session state: a window reopened later
             // from this entry comes up on top, so the entry keeps none.
             let win_state = SavedWindowState { stack: None, ..win_state };
-            if let Some(pos) = last_states.iter().position(|s| last_state_slot(s, &app_id, args.first().map(String::as_str))) {
+            let program = args.first().map(String::as_str);
+            if let Some(pos) = last_states.iter().position(|s| last_state_slot(s, &app_id, program)) {
                 last_states[pos] = win_state;
+                // Any later slot this program positively owns is a duplicate
+                // from before `saved_by_program` knew a bare name and its
+                // path for one binary; the first match would keep winning
+                // over it, so it can only ever be stale.
+                if let Some(program) = program {
+                    let mut i = pos + 1;
+                    while i < last_states.len() {
+                        if last_states[i].app_id == app_id && saved_by_program(&last_states[i], program) {
+                            last_states.remove(i);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
             } else {
                 last_states.push(win_state);
             }
@@ -605,6 +615,7 @@ impl WindowManager {
         self.restore_queue
             .iter()
             .chain(self.last_window_states.iter())
+            .chain(self.restart_entries.iter().map(|e| &e.state))
             .any(|w| w.app_id == app_id && (titles_match(title, &w.title) || titles_resemble(title, &w.title)))
     }
 
@@ -900,11 +911,59 @@ pub(crate) fn saved_by_program(saved: &SavedWindowState, program: &str) -> bool 
     // The saved cmdline is argv joined with spaces, and argv[0] may hold
     // spaces itself (`C:\Program Files (x86)\...`), so compare by prefix
     // rather than by splitting.
-    !program.is_empty()
-        && saved
-            .cmdline
-            .strip_prefix(program)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    if program.is_empty() {
+        return false;
+    }
+    if saved.cmdline.strip_prefix(program).is_some_and(|rest| rest.is_empty() || rest.starts_with(' ')) {
+        return true;
+    }
+    // The same binary named another way: a run launched by bare name
+    // (`cce-secrets`) and one recorded by the absolute path PATH resolves
+    // that name to. Read as two programs they took two `last_window_states`
+    // slots, and the title pass handed a relaunch whichever came first — a
+    // stale spot the window had left hours before.
+    saved.argv.as_ref().and_then(|a| a.first()).is_some_and(|a0| same_binary(a0, program))
+}
+
+/// Whether argv[0]s `a` and `b` run the same file: each an absolute path, or
+/// a bare name resolved as `sh` would through the compositor's `PATH`, and
+/// compared after symlinks. False when either cannot be resolved (a Windows
+/// path, a binary no longer on disk).
+pub(crate) fn same_binary(a: &str, b: &str) -> bool {
+    same_binary_on(a, b, &std::env::var("PATH").unwrap_or_default())
+}
+
+/// [`same_binary`] against `path_var` for `PATH`.
+pub(crate) fn same_binary_on(a: &str, b: &str, path_var: &str) -> bool {
+    let resolve = |arg0: &str| -> Option<std::path::PathBuf> {
+        use std::os::unix::fs::PermissionsExt;
+        if arg0.contains('/') {
+            return std::fs::canonicalize(arg0).ok();
+        }
+        path_var.split(':').filter(|d| !d.is_empty()).find_map(|dir| {
+            let candidate = std::path::Path::new(dir).join(arg0);
+            let meta = std::fs::metadata(&candidate).ok()?;
+            (meta.is_file() && meta.permissions().mode() & 0o111 != 0).then(|| std::fs::canonicalize(&candidate).ok())?
+        })
+    };
+    if a == b {
+        return true;
+    }
+    match (resolve(a), resolve(b)) {
+        (Some(ra), Some(rb)) => ra == rb,
+        _ => false,
+    }
+}
+
+/// Where `w` lives on the desk, as an entry records it: (virtual_x,
+/// virtual_y, fullscreen_at). Fullscreen, `virtual_x/y` is the desk spot the
+/// window covers (`place_fullscreen_windows`), not where it lives.
+pub(crate) fn saved_spot(w: &Window) -> (f64, f64, Option<(f64, f64)>) {
+    if w.was_fullscreen {
+        (w.saved_virtual_x, w.saved_virtual_y, Some((w.virtual_x, w.virtual_y)))
+    } else {
+        (w.virtual_x, w.virtual_y, w.last_fullscreen_at.or(w.restore_fullscreen_at))
+    }
 }
 
 /// Whether the app_id-only pass may hand `saved` to a window of `program`:

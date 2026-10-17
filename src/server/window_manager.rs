@@ -269,6 +269,9 @@ pub struct WindowManager {
     /// Polls `app_restarts`; created on the first restart, armed while any
     /// is left.
     pub app_restart_timer: crate::event_source::Timer,
+    /// The windows `restart-app` closed, waiting for the new process to map
+    /// them again (`restart_app::RestartEntry`, taken by `try_restore`).
+    pub(crate) restart_entries: Vec<restart_app::RestartEntry>,
     pub startup: Vec<crate::config::StartupConfig>,
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
@@ -890,6 +893,7 @@ impl WindowManager {
         // closed — the session is ending anyway.
         self.app_restart_timer.remove();
         self.app_restarts.clear();
+        self.restart_entries.clear();
         self.restore_placeholder_timer.remove();
         // Placeholder rects go down with the scene; only the bookkeeping.
         // Released, not dropped: dropping a handle would destroy its rect
@@ -2092,10 +2096,14 @@ impl WindowManager {
         //
         // Chrome departing is not an app exit: dismissing the cce-cloud
         // launcher (Popup) or an Overlay dock must never fire the camera
-        // reaction — those close as part of using them.
+        // reaction — those close as part of using them. Nor is a window
+        // `restart-app` closed: it is back in a moment where it was, and
+        // panning to the fallback in between swung the view away and back
+        // on every install that restarted the app in front of the user.
         let departing_chrome = match seat_mut!(self, sid).focused {
             crate::seat::Focus::Window(id) => self.windows.get(id).is_some_and(|w| {
-                matches!(w.tiling_mode, crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay)
+                w.restart_closing
+                    || matches!(w.tiling_mode, crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay)
             }),
             _ => false,
         };
@@ -3628,6 +3636,27 @@ mod tests {
         assert_eq!(path_shadowed_name("inkscape", &wrappers.path()), None);
         let gone = wrappers.0.join("nope/inkscape").to_string_lossy().into_owned();
         assert_eq!(path_shadowed_name(&gone, &wrappers.path()), None);
+    }
+
+    /// A run launched by bare name and one recorded by the absolute path
+    /// PATH resolves that name to are one program: read as two, they held
+    /// two `last_window_states` slots and a relaunch took the stale one.
+    #[test]
+    fn a_bare_name_and_its_resolved_path_are_one_binary() {
+        let bin = BinDir::new("bin");
+        let real = bin.file("cce-secrets", true);
+        let links = BinDir::new("links");
+        std::os::unix::fs::symlink(&real, links.0.join("cce-secrets")).unwrap();
+        let path = format!("{}:{}", links.path(), bin.path());
+        assert!(same_binary_on("cce-secrets", &real, &path));
+        assert!(same_binary_on(&real, "cce-secrets", &bin.path()));
+        // A namesake elsewhere is another file.
+        let other = BinDir::new("other");
+        let namesake = other.file("cce-secrets", true);
+        assert!(!same_binary_on("cce-secrets", &namesake, &path));
+        // Unresolvable on either side never matches by resolution.
+        assert!(!same_binary_on("cce-secrets", "C:\\x.exe", &path));
+        assert!(!same_binary_on("nope", "nope2", &path));
     }
 
     #[test]

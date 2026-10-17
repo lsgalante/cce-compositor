@@ -631,7 +631,7 @@ impl Seat {
                 // from `last_window_states`. Focus moving between windows that were
                 // already up still pans either way; the key is about spawning.
                 if let Some((id, w)) = wid.and_then(|id| Some((id, wm.windows.get(id)?))) {
-                    let (session_restored, hint_placed) = (w.session_restored, w.hint_placed);
+                    let (session_restored, hint_placed, restarted) = (w.session_restored, w.hint_placed, w.restarted);
                     let spawn_pan = !session_restored
                         && !hint_placed
                         && crate::shared::layout().center_on_spawn;
@@ -644,7 +644,11 @@ impl Seat {
                     // other, except for placement-hinted spawns (pickers that
                     // open at their control and must not yank the camera).
                     let user_focus = wm.startup_input_seen && !hint_placed;
-                    if !is_new || spawn_pan || user_focus {
+                    // A window `restart-app` brought back is where it was
+                    // and the camera is where the user left it: its first
+                    // focus is the restart's, not a spawn's, and moves
+                    // nothing.
+                    if !is_new || ((spawn_pan || user_focus) && !restarted) {
                         Seat::focus_follow_pan(wm, sid, id);
                     }
                 }

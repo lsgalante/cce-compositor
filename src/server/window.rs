@@ -590,6 +590,15 @@ pub struct Window {
     /// fresh spawn for `center_on_spawn`.
     pub session_restored: bool,
     pub restored_focused: bool,
+    /// Being closed by `restart-app`: its going is not an app exit, so the
+    /// fallback focus moves no camera (`focus_next_visible_window`).
+    pub restart_closing: bool,
+    /// Restored from a `restart-app` entry (`try_restore`): back where it
+    /// was, so its first focus moves no camera (`Seat::focus`).
+    pub restarted: bool,
+    /// Restored from a `restart-app` entry of a window that was not focused
+    /// when the restart closed it: it maps without taking focus.
+    pub restart_unfocused: bool,
     /// The stack position this window's SESSION entry saved
     /// (`SavedWindowState::stack`): where `render_list_place_restored` slots
     /// it among the restored windows already up, so a login rebuilds the
@@ -1002,6 +1011,9 @@ impl Window {
             satellite: false,
             session_restored: false,
             restored_focused: false,
+            restart_closing: false,
+            restarted: false,
+            restart_unfocused: false,
             restore_stack: None,
             closed: false,
             close_requested: false,
@@ -1598,6 +1610,11 @@ impl Window {
                     log::info!("[FocusRestore] Blocking focus steal by unrestored window {:?} mapping before first input", this.get_title());
                     should_focus = false;
                 }
+            }
+
+            if should_focus && this.restart_unfocused {
+                log::info!("[FocusRestore] Restarted window {:?} was not focused before the restart; maps unfocused", this.get_title_string());
+                should_focus = false;
             }
 
             // A client whose connection broke rebuilds its surface from

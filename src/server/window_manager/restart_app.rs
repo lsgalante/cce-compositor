@@ -3,9 +3,31 @@
 //! `/proc` snapshot taken first (`crate::app_restart`). The reply is held
 //! until the new process is started or the restart gives up, so a script can
 //! chain on it.
+//!
+//! The new process's windows come back as the old ones stood: each closed
+//! window's state is kept as a [`RestartEntry`] and `Window::try_restore`
+//! takes it ahead of anything in `state.json`.
 
 use super::*;
 use crate::app_restart::{PendingRestart, Snapshot, GRACE_MS, KILL_AFTER_TERM_MS, POLL_MS};
+
+/// How long a closed window's state waits for the restarted app to map its
+/// window again: the grace and `--force` signals, then the app's own start.
+const RESTART_ENTRY_TTL_NS: u64 = 60_000_000_000;
+
+/// A window `restart-app` closed, as it stood: the saved-state record a
+/// login would restore from, plus what that record leaves out. It is
+/// handed back exactly — no recall into view, no cascade, no geometric
+/// promotion, the mode lock as it was — and only to a window of the same
+/// app_id and program, once.
+pub(crate) struct RestartEntry {
+    pub state: SavedWindowState,
+    pub mode_locked: bool,
+    /// The process that held the window, so a restart that is called off
+    /// can take its entries back.
+    pub pid: i32,
+    pub expires_ns: u64,
+}
 
 impl WindowManager {
     pub(crate) fn restart_app_command(&mut self, parts: &[&str]) -> String {
@@ -50,8 +72,10 @@ impl WindowManager {
             .filter(|w| !w.closed && w.unreliable_pid() == pid)
             .map(|w| w.id())
             .collect();
+        self.keep_restart_entries(pid, &ids, now);
         for &id in &ids {
             if let Some(w) = self.windows.get_mut(id) {
+                w.restart_closing = true;
                 w.close();
             }
         }
@@ -69,6 +93,91 @@ impl WindowManager {
         self.app_restarts.push(pending);
         self.arm_app_restart_timer();
         String::new()
+    }
+
+    /// Record each of `ids` (windows of `pid`, about to close) as a
+    /// [`RestartEntry`]. The focused one goes first, so a relaunch that
+    /// comes back with fewer windows, or retitled, gives the main one its
+    /// spot. Skipped like `save_state` skips them, and for the same reason
+    /// `try_restore` never asks for them: transients, Utility, shy helpers,
+    /// satellites, and the desktop's own surfaces.
+    fn keep_restart_entries(&mut self, pid: i32, ids: &[crate::window::WindowId], now: u64) {
+        crate::wm_scope!(mut);
+        self.restart_entries.retain(|e| e.expires_ns > now && e.pid != pid);
+        let argv = proc_args(pid);
+        let cmdline = argv.join(" ");
+        let focused = self.focused_window();
+        let mut ordered: Vec<_> = ids.to_vec();
+        ordered.sort_by_key(|&id| Some(id) != focused);
+        for id in ordered {
+            let Some(w) = self.windows.get(id) else { continue };
+            if w.tiling_mode == crate::tiling::TilingMode::Utility
+                || w.get_parent().is_some()
+                || w.is_shy()
+                || w.satellite
+                || w.is_status_bar()
+                || w.is_wallpaper()
+                || w.is_grid()
+            {
+                continue;
+            }
+            let Some(app_id) = w.get_app_id_string().filter(|a| !a.is_empty()) else { continue };
+            let (virtual_x, virtual_y, fullscreen_at) = saved_spot(w);
+            let state = SavedWindowState {
+                app_id: app_id.clone(),
+                title: w.get_title_string().unwrap_or_default(),
+                tiling_mode: w.tiling_mode,
+                minimized: w.minimized,
+                virtual_x,
+                virtual_y,
+                scale: w.scale,
+                width: w.box_geom.width as u32,
+                height: w.box_geom.height as u32,
+                cmdline: if cmdline.is_empty() { app_id } else { cmdline.clone() },
+                focused: Some(id) == focused,
+                argv: (!argv.is_empty()).then(|| argv.clone()),
+                fullscreen_at,
+                stack: None,
+            };
+            log::info!(
+                "[ipc] restart-app: keeping {:?} ({}) {:?} {}x{} at ({:.0}, {:.0}){}",
+                state.title,
+                state.app_id,
+                state.tiling_mode,
+                state.width,
+                state.height,
+                state.virtual_x,
+                state.virtual_y,
+                if state.focused { ", focused" } else { "" }
+            );
+            self.restart_entries.push(RestartEntry {
+                state,
+                mode_locked: w.mode_locked,
+                pid,
+                expires_ns: now + RESTART_ENTRY_TTL_NS,
+            });
+        }
+    }
+
+    /// The entry a window of `app_id` running `program` takes back after a
+    /// restart, removed: the same title, then a resembling one, then the
+    /// first of the app's left (titled or not — these are its own windows,
+    /// not another app's under a shared class).
+    pub(crate) fn take_restart_entry(&mut self, app_id: &str, title: &str, program: Option<&str>) -> Option<RestartEntry> {
+        crate::wm_scope!(mut);
+        let now = crate::util::timestamp_ns();
+        self.restart_entries.retain(|e| e.expires_ns > now);
+        if app_id.is_empty() {
+            return None;
+        }
+        let ours = |e: &RestartEntry| e.state.app_id == app_id && same_program(&e.state, program);
+        let pos = self
+            .restart_entries
+            .iter()
+            .position(|e| ours(e) && titles_match(title, &e.state.title))
+            .or_else(|| self.restart_entries.iter().position(|e| ours(e) && titles_resemble(title, &e.state.title)))
+            .or_else(|| self.restart_entries.iter().position(ours))?;
+        Some(self.restart_entries.remove(pos))
     }
 
     fn arm_app_restart_timer(&mut self) {
@@ -120,6 +229,9 @@ impl WindowManager {
                 None if ms(r.started_ns) >= GRACE_MS => {
                     if !r.force {
                         log::info!("[ipc] restart-app: {} (pid {}) still running after {} ms; restart cancelled", name, old, GRACE_MS);
+                        // Its windows are staying (a save prompt kept them):
+                        // their entries must not land a new window on them.
+                        self.restart_entries.retain(|e| e.pid != old);
                         r.answer(format!(
                             "error: {} (pid {}) is still running {} s after its windows were asked to close \
                              (a save prompt, or it stays resident); not restarted — `restart-app --force` signals it\n",

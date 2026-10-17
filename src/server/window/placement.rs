@@ -58,7 +58,9 @@ impl Window {
             let title = this.get_title_string().unwrap_or_default();
             let program = crate::window_manager::proc_args(this.unreliable_pid()).into_iter().next();
             let saved = wm
-                .match_and_remove_restore_state(&app_id, &title, program.as_deref())
+                .take_restart_entry(&app_id, &title, program.as_deref())
+                .map(|e| e.state)
+                .or_else(|| wm.match_and_remove_restore_state(&app_id, &title, program.as_deref()))
                 .or_else(|| wm.match_last_window_state(&app_id, &title, program.as_deref()));
             let this = window_mut!(wm, id);
             this.restore_fullscreen_at = saved.and_then(|s| s.fullscreen_at);
@@ -139,13 +141,26 @@ impl Window {
         let this = window_mut!(wm, id);
         let program = crate::window_manager::proc_args(this.unreliable_pid()).into_iter().next();
         let program = program.as_deref();
-        let mut saved_opt = wm.match_and_remove_restore_state(&app_id_str, &title_str, program);
-        let from_session = saved_opt.is_some();
+        // A window `restart-app` closed a moment ago outranks both: it is
+        // this very window's state, as it stood, where the file's entries
+        // are as of the last save — or another run's.
+        let restart = wm.take_restart_entry(&app_id_str, &title_str, program);
+        let restart_locked = restart.as_ref().map(|e| e.mode_locked);
+        let from_restart = restart.is_some();
+        let mut saved_opt = restart.map(|e| e.state);
+        if saved_opt.is_none() {
+            saved_opt = wm.match_and_remove_restore_state(&app_id_str, &title_str, program);
+        }
+        let from_session = !from_restart && saved_opt.is_some();
         if saved_opt.is_none() {
             saved_opt = wm.match_last_window_state(&app_id_str, &title_str, program);
         }
         if let Some(saved) = saved_opt {
-            log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
+            log::info!(
+                "Restoring saved state for window{}: app_id={}, title={}. Position: ({}, {}), Size: {}x{}",
+                if from_restart { " (restart-app)" } else { "" },
+                app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height
+            );
             let this = window_mut!(wm, id);
             this.tiling_mode = saved.tiling_mode;
             // `minimized` is session state, not app memory: a window the
@@ -155,7 +170,7 @@ impl Window {
             // parentless dialog matched by app_id alone inherits it from
             // the LIVE main window, which the user may well have minimized
             // to get it out of the way. Focused, listed, and invisible.
-            if from_session {
+            if from_session || from_restart {
                 this.minimized = saved.minimized;
             }
             this.virtual_x = saved.virtual_x;
@@ -223,6 +238,12 @@ impl Window {
             if saved.tiling_mode != crate::tiling::TilingMode::Floating {
                 this.mode_locked = true;
             }
+            // A restart knows the lock itself: a window the user floated
+            // against a tiling rule stays floated, and the steps below that
+            // second-guess a remembered spot have nothing to correct.
+            if let Some(locked) = restart_locked {
+                this.mode_locked = locked;
+            }
 
             // Geometric promotion at restore time: a window whose saved
             // geometry sits cell-aligned IS tiled, even if an older session
@@ -231,7 +252,7 @@ impl Window {
             // lock as the op_end detection. No demotion here — a saved
             // Tiled window off the current grid is re-snapped by the Tiled
             // arrange arm instead.
-            if this.tiling_mode == crate::tiling::TilingMode::Floating {
+            if !from_restart && this.tiling_mode == crate::tiling::TilingMode::Floating {
                 let sp = crate::shared::layout().snap_params();
                 if crate::policy::snap::is_cell_aligned(
                     this.virtual_x,
@@ -261,7 +282,7 @@ impl Window {
             // windows already up) is placed beside content the user pans
             // along, and stays where it was put — cce-data-editor parked
             // left of the first column came back mid-view every login.
-            if this.tiling_mode == crate::tiling::TilingMode::Floating && !this.minimized {
+            if !from_restart && this.tiling_mode == crate::tiling::TilingMode::Floating && !this.minimized {
                 let stores = stores!(wm);
                 let (_, _, vp_w, vp_h) = this.first_enabled_output_box(stores);
                 let cam = crate::policy::camera::Camera {
@@ -300,7 +321,7 @@ impl Window {
             // offsets a new window from the last. Session entries are
             // exempt: a restored layout is where the user left it.
             let this = window_mut!(wm, id);
-            if !from_session && this.tiling_mode == crate::tiling::TilingMode::Floating {
+            if !from_session && !from_restart && this.tiling_mode == crate::tiling::TilingMode::Floating {
                 let (vx, vy) = (this.virtual_x, this.virtual_y);
                 let (nx, ny) = window_ref!(wm, id).cascade_off_siblings(wm, &app_id_str, vx, vy);
                 let this = window_mut!(wm, id);
@@ -322,6 +343,10 @@ impl Window {
             // (whether the app happened to be focused when last closed) and
             // must not feed the settle-phase focus gates.
             this.restored_focused = from_session && saved.focused;
+            // A restarted window that did not have focus maps without
+            // taking it (`map`): the restart should leave focus where it was.
+            this.restarted = from_restart;
+            this.restart_unfocused = from_restart && !saved.focused;
             // Its place in the stacking order, likewise session-only: a
             // window reopened later comes up on top like any new one. One
             // already in the render list (linked before its title or map

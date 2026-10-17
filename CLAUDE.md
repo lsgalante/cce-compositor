@@ -2168,6 +2168,25 @@ headless seat has no keyboard and Chromium crashes in
   <name> (pid A -> B)`, or after `GRACE_MS` (10 s) an error that leaves the
   app alone (a save prompt) — `--force` instead SIGTERMs, then SIGKILLs 3 s
   on. Verified in a shadow, SIGSTOP standing in for a stuck app.
+  **The app comes back as it stood** (since 2026-10-17): before closing,
+  each window is kept as a `RestartEntry` (`restart_entries`, 60 s) —
+  position, size, mode and its lock, minimized, fullscreen spot, focus —
+  and `try_restore` takes it ahead of `state.json` (`take_restart_entry`:
+  same app_id and program; title, resembling title, then the focused
+  window's first). It is applied exactly: no recall into view, cascade or
+  geometric promotion; a window that was not focused maps unfocused, and
+  none pans the camera on its first focus (`Window::restarted`). Nor does
+  the close: a window `restart-app` closes is marked `restart_closing`, and
+  `focus_next_visible_window` treats its going like chrome's — focus falls
+  back, the camera stays (no `on_app_exit` pan). Before, every install that
+  restarted the app in front of the user flew the view to the previous
+  window, and since the return focus did not pan, left it there. A
+  cancelled restart drops its entries. Before, a relaunch borrowed
+  `last_window_states`, which kept one entry per app and could hold a stale
+  one: a run by bare name (`cce-secrets`) and one recorded by its resolved
+  path were two programs with two slots, and the title pass took the older.
+  `saved_by_program` now counts the same file (`same_binary`) as one
+  program, and `save_state` drops such duplicate slots.
 - **Status socket** `/tmp/cce-status-interface-{WAYLAND_DISPLAY}.sock` (`status_server.rs`): runs
   on its own thread; a client sends one subscription line (`layout`, `title`,
   `modifiers`, `dismiss`, …) and receives text lines on every
