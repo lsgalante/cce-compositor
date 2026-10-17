@@ -444,11 +444,12 @@ reaches running clients and the compositor without a reload. Set
 
 What follows the switch: in cce-ui, the dropdown open/close, the toggle
 slide, the scrollbar raise/sink fade, the wheel glide and kinetic coast
-(`scroll_settings()` reports both off), slider and ramp wheel inertia, and
-the hover highlight. In the compositor, the open/close fades (window,
-overlay layer, and the `fade-out` reply, which answers 0), the camera eases
-(`advance_camera_animation`: overview ramp, focus pans, kinetic pan), the
-border-reveal/adjust-dim fades, and the fullscreen-toggle resize. **A new
+(`scroll_settings()` reports both off), slider and ramp wheel inertia, the
+hover highlight, and the Spinner's turn (it holds a still pose). In the
+compositor, the open/close fades (window, overlay layer, and the `fade-out`
+reply, which answers 0), the camera eases (`advance_camera_animation`:
+overview ramp, focus pans, kinetic pan), the border-reveal/adjust-dim fades,
+and the fullscreen-toggle resize. **A new
 animation should ask `enabled()` too.** Like the close fade, the cce-ui half
 reaches a client only once that client has been rebuilt against the toolkit.
 
